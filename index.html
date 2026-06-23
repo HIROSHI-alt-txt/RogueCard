@@ -123,9 +123,13 @@ const CARD_MASTER = {
   inflame:      { name: "INFLAME",      cost: 1, type: "POW", value: 2,  desc: "STRENGTH +2", rare: "RARE", isInflame: true },
   armaments:    { name: "ARMAMENTS",    cost: 1, type: "DEF", value: 5,  desc: "BLK 5 / UPGRADE 1 RAND CARD", rare: "COMMON", isArmaments: true },
   flask:        { name: "FLASK",        cost: 2, type: "ATK", value: 0,  desc: "APPLY 3 POISON 3 TIMES", rare: "RARE", isFlask: true, poisonTimes: 3, poisonVal: 3 },
-  dodge:        { name: "DODGE",        cost: 1, type: "DEF", value: 4,  desc: "BLK 4 / NEXT TURN BLK 4", rare: "COMMON", isDodge: true, nextBlock: 4 },
-  tStrike:      { name: "T-STRIKE",     cost: 3, type: "ATK", value: 0,  desc: "DMG = 5 x COMBAT ATKS PLAYED", rare: "RARE", isThunderStrike: true, factor: 5 },
   dblNrg:       { name: "DBL-NRG",      cost: 1, type: "POW", value: 0,  desc: "DOUBLE CURRENT ENERGY", rare: "RARE", isDoubleEnergy: true },
+  payday:       { name: "PAYDAY",       cost: 0, type: "ATK", value: 3,  desc: "DMG 3 / GOLD +5", rare: "COMMON", payday: true },
+  bribery:      { name: "BRIBERY",      cost: 1, type: "DEF", value: 0,  desc: "WEAK 1 / PAY 15G -> ENEMY ATK -5", rare: "RARE", bribery: true },
+  goldSlam:     { name: "GOLD SLAM",    cost: 2, type: "ATK", value: 0,  desc: "DMG = 20% OF GOLD", rare: "RARE", goldSlam: true },
+  leftBlast:    { name: "LEFT BLAST",   cost: 1, type: "ATK", value: 6,  desc: "LEFTMOST: DMG 6 -> 16", rare: "COMMON", leftBlast: true },
+  rightShield:  { name: "R-SHIELD",     cost: 1, type: "DEF", value: 5,  desc: "RIGHTMOST: BLK 5 -> 12", rare: "COMMON", rightShield: true },
+  centerCharge: { name: "C-CHARGE",     cost: 0, type: "DRW", value: 2,  desc: "CENTER ONLY: DRAW 2", rare: "COMMON", centerOnly: true },
 
   // -------------------- アップグレード版カード --------------------
   "strike+": { name: "STRIKE+", cost: 1, type: "ATK", value: 10, desc: "ENEMY -10 HP", rare: "COMMON" },
@@ -158,6 +162,12 @@ const CARD_MASTER = {
   "tStrike+":   { name: "T-STRIKE+",    cost: 3, type: "ATK", value: 0,  desc: "DMG = 7 x COMBAT ATKS PLAYED", rare: "RARE", isThunderStrike: true, factor: 7 },
   "dblNrg+":    { name: "DBL-NRG+",     cost: 0, type: "POW", value: 0,  desc: "DOUBLE CURRENT ENERGY", rare: "RARE", isDoubleEnergy: true },
   
+  heavyStrain:  { name: "STRAIN",       cost: 9, type: "CURS", value: 0,  desc: "UNPLAYABLE / T-END TAKE DMG = LOOP", rare: "COMMON" },
+  "strike-":    { name: "STRIKE-",      cost: 0, type: "ATK", value: 6,   desc: "ENEMY -6 HP / COST 0", rare: "COMMON" },
+  "defend-":    { name: "DEFEND-",      cost: 0, type: "DEF", value: 5,   desc: "BLOCK +5 / COST 0", rare: "COMMON" },
+  "bash-":      { name: "BASH-",        cost: 1, type: "ATK", value: 10,  desc: "ENEMY -10 HP / COST 1", rare: "COMMON", innate: true },
+  "zap-":       { name: "ZAP-",         cost: 0, type: "ATK", value: 5,   desc: "DMG 5 / COST 0", rare: "COMMON" },
+
   // トークンカード
   shiv:        { name: "SHIV",         cost: 0, type: "ATK", value: 4,  desc: "DMG 4 / EXHAUST TOKEN", rare: "COMMON", exhaust: true }
 };
@@ -167,7 +177,8 @@ const ENEMY_TEMPLATES = {
   2: { name: "SLIME", hp: 35, type: "slime", exp: 20 },
   3: { name: "ELITE ORC", hp: 55, type: "orc", exp: 35 },
   4: { name: "EVIL MAGE", hp: 58, type: "mage", exp: 40 },
-  5: { name: "DRAGON (BOSS)", hp: 120, type: "dragon", exp: 100 }
+  5: { name: "DRAGON (BOSS)", hp: 120, type: "dragon", exp: 100 },
+  6: { name: "LICH (BOSS)", hp: 100, type: "lich", exp: 100 }
 };
 
 const RELIC_MASTER = {
@@ -180,7 +191,10 @@ const RELIC_MASTER = {
   echoRing:    { name: "ECHO RING",    desc: "1st ATK played TWICE", cost: 60 },
   burningBlood:{ name: "BURNING BLOOD",desc: "WIN COMBAT -> HP +6", cost: 50 },
   sneckoSkull: { name: "SNECKO SKULL", desc: "POISON APPLY +1", cost: 45 },
-  mummifiedHand:{ name:"MUMMY HAND",  desc: "POW PLAY -> RAND -1 COST", cost: 60 }
+  mummifiedHand:{ name:"MUMMY HAND",  desc: "POW PLAY -> RAND -1 COST", cost: 60 },
+  goldBag:     { name: "GOLD BAG",     desc: "COMBAT START GOLD +5G", cost: 45 },
+  loopCrown:   { name: "LOOP CROWN",   desc: "PERMANENT ATK +3", cost: 50 },
+  voidStone:   { name: "VOID STONE",   desc: "TURN START NRG +1 / MAX HP -5", cost: 50 }
 };
 
 let currentFloor = 1;
@@ -193,7 +207,14 @@ let enemyDeathFrame = 0;
 // プレイヤー
 let pHP = 50, pMaxHP = 50, pEnergy = 3, pMaxEnergy = 3, pBlock = 0, pPower = 0, pGold = 45, pExp = 0, pLv = 1;
 let pPoison = 0, pWeak = 0, pVuln = 0;
-let pRelics = { redGem: false, blueGem: false, greenGem: false, funnel: false, ninjaScroll: false, letterOpener: false, echoRing: false, burningBlood: false, sneckoSkull: false, mummifiedHand: false };
+let pRelics = { redGem: false, blueGem: false, greenGem: false, funnel: false, ninjaScroll: false, letterOpener: false, echoRing: false, burningBlood: false, sneckoSkull: false, mummifiedHand: false, goldBag: false, loopCrown: false, voidStone: false };
+
+// ポジショニング＆簡易マップ用変数
+let playedCardIdx = -1;
+let playedHandLength = 0;
+let mapOptions = [];
+let upgradeTargetIdx = -1; // SMITH強化確認画面用
+let upgradeSource = ""; // "CAMPFIRE" | "LEVELUP"
 
 // コンボエンジン用バフ
 let turnAtkCount = 0;
@@ -284,6 +305,11 @@ function decideEnemyIntent() {
     if (eTurnCount % 3 === 1) eIntent = { action: "ATTACK", type: "🔥", name: isPhase2 ? "HELLFIRE" : "DRAGON BREATH", value: isPhase2 ? 24 : 16, poison: isPhase2 ? 3 : 0 };
     else if (eTurnCount % 3 === 2) eIntent = { action: "DEFEND", type: "🛡️", name: "SCALE GUARD", value: isPhase2 ? 8 : 14 };
     else eIntent = { action: "ATTACK", type: "⚔️", name: isPhase2 ? "VENOM BITE" : "BITE", value: 10, poison: isPhase2 ? 2 : 0 };
+  } else if (eType === "lich") {
+    let isPhase2 = eHP <= (eMaxHP / 2);
+    if (eTurnCount % 3 === 1) eIntent = { action: "ATTACK", type: "💀", name: "DARK CURSE", value: 0 };
+    else if (eTurnCount % 3 === 2) eIntent = { action: "ATTACK", type: "🔮", name: "NECRO BEAM", value: isPhase2 ? 20 : 14 };
+    else eIntent = { action: "DEFEND", type: "🛡️", name: "SOUL BARRIER", value: 15 };
   }
   
   // スライムの加勢攻撃スケーリング (+4 x 生存数)
@@ -316,7 +342,7 @@ function startPlayerTurn() {
     pPoison--;
   }
 
-  let maxEnergyBonus = pMaxEnergy + (pRelics.greenGem ? 1 : 0) + nextTurnEnergyMod;
+  let maxEnergyBonus = pMaxEnergy + (pRelics.greenGem ? 1 : 0) + (pRelics.voidStone ? 1 : 0) + nextTurnEnergyMod;
   pEnergy = Math.max(0, maxEnergyBonus);
   nextTurnEnergyMod = 0; 
 
@@ -326,6 +352,12 @@ function startPlayerTurn() {
       pBlock = Math.floor(pBlock / 2);
       if (pBlock > 0) dmgPopups.push({ text: "🔥FLAME AURA: BLK HALVED", x: 100, y: 100, col: RED, frames: 30 });
     }
+  }
+
+  // リッチフェーズ2パッシブ効果
+  if (ePhase2Triggered && eType === "lich") {
+    pFrail++;
+    dmgPopups.push({ text: "💀 LICH DECAY: FRAIL +1", x: 100, y: 150, col: PURPLE, frames: 35 });
   }
 
   pBlock = (pRelics.blueGem ? 3 : 0) + nextTurnBlock;
@@ -441,6 +473,13 @@ function runEnemyTurn() {
     dmgPopups.push({ text: `BURN -${burnDmg} HP`, x: 100, y: 120, col: RED, frames: 40 });
     if (pHP <= 0) { gameState = "GAMEOVER"; return; }
   }
+  let strainCount = hand.filter(k => k === "heavyStrain").length;
+  if (strainCount > 0) {
+    let strainDmg = strainCount * currentLoop;
+    pHP = Math.max(0, pHP - strainDmg);
+    dmgPopups.push({ text: `STRAIN -${strainDmg} HP`, x: 100, y: 110, col: RED, frames: 40 });
+    if (pHP <= 0) { gameState = "GAMEOVER"; return; }
+  }
 
   let retained = [];
   let toDiscard = [];
@@ -523,6 +562,22 @@ function runEnemyTurn() {
         activeOrcChallenge = true;
         dmgPopups.push({ text: "🛡️ CHALLENGED: ATK GIVES BLOCK", x: 256, y: 220, col: RED, frames: 55 });
       }
+      // LICHのDARK CURSE効果
+      if (eType === "lich" && eIntent.name === "DARK CURSE") {
+        let curses = ["regret", "decay"];
+        let selectedC = curses[Math.floor(Math.random() * curses.length)];
+        deck.push(selectedC);
+        shuffle(deck);
+        dmgPopups.push({ text: `💀 CURSE: ${CARD_MASTER[selectedC].name} ADDED`, x: 256, y: 220, col: PURPLE, frames: 55 });
+      }
+      // LICHフェーズ移行チェック
+      if (eType === "lich" && eHP <= (eMaxHP / 2) && !ePhase2Triggered) {
+        ePhase2Triggered = true;
+        flashFrame = 20;
+        dmgPopups.push({ text: "💀 THE LICH LAUGHS COLDLY! 💀", x: 256, y: 170, col: PURPLE, frames: 70 });
+        dmgPopups.push({ text: "PHASE 2: EVERY TURN FRAIL +1", x: 256, y: 195, col: RED, frames: 60 });
+        beep(90, 0.4, 'sawtooth', 0.25); beep(70, 0.35, 'sawtooth', 0.2, 0.12);
+      }
       // DRAGONフェーズ移行チェック
       if (eType === "dragon" && eHP <= (eMaxHP / 2) && !ePhase2Triggered) {
         ePhase2Triggered = true;
@@ -557,6 +612,10 @@ function runEnemyTurn() {
         ePoison = 0;
         eWeak = eVuln = 0;
         dmgPopups.push({ text: "MELDING: +15 HP & CURED", x: 380, y: 160, col: GREEN, frames: 45 });
+      } else if (eIntent.name === "SOUL BARRIER") {
+        eBlock += baseEValue;
+        eThorns += 2;
+        dmgPopups.push({ text: `+${baseEValue} BLOCK / THORNS +2`, x: 380, y: 160, col: CYAN, frames: 45 });
       } else {
         eBlock += baseEValue;
         dmgPopups.push({ text: `+${baseEValue} BLOCK`, x: 380, y: 160, col: "#00c8d0", frames: 35 });
@@ -667,7 +726,10 @@ function initGame() {
 
 function initFloor() {
   gameState = "BATTLE";
-  const t = ENEMY_TEMPLATES[currentFloor] || ENEMY_TEMPLATES[1];
+  let t = ENEMY_TEMPLATES[currentFloor] || ENEMY_TEMPLATES[1];
+  if (currentFloor === 5) {
+    t = Math.random() < 0.5 ? ENEMY_TEMPLATES[5] : ENEMY_TEMPLATES[6];
+  }
   eName = t.name; 
   
   // HPスケーリング: LOOP 1 = 1.0, LOOP 2 = 1.5, LOOP 3 = 2.0 ...
@@ -701,33 +763,49 @@ function initFloor() {
   hand = []; discard = [];
   handCostMods = [];
   shuffle(deck);
+  if (pRelics.goldBag) {
+    pGold += 5;
+    dmgPopups.push({ text: "GOLD BAG +5G", x: 100, y: 150, col: YELLOW, frames: 40 });
+  }
   startPlayerTurn();
 }
 
+function generateMapOptions() {
+  mapOptions = [];
+  let nextF = currentFloor + 1;
+  if (nextF >= 5) {
+    mapOptions.push({ type: "BATTLE", label: "🐲 BOSS BATTLE", desc: "最深部：ボスとの決戦" });
+    mapOptions.push({ type: "CAMPFIRE", label: "🔥 CAMPFIRE", desc: "決戦前の休息" });
+  } else if (nextF === 3) {
+    mapOptions.push({ type: "BATTLE", label: "⚔️ ELITE BATTLE", desc: "強力な敵との戦闘" });
+    mapOptions.push({ type: "SHOP", label: "🏪 BLACK MARKET", desc: "闇市で取引する" });
+  } else {
+    let pool = [
+      { type: "BATTLE", label: "⚔️ ENEMY BATTLE", desc: "一般モンスターとの遭遇" },
+      { type: "EVENT", label: "❓ MYSTERY EVENT", desc: "未知のイベント" },
+      { type: "CAMPFIRE", label: "🔥 CAMPFIRE", desc: "たき火で休む" },
+      { type: "SHOP", label: "🏪 BLACK MARKET", desc: "アイテムの売買" }
+    ];
+    shuffle(pool);
+    mapOptions.push(pool[0]);
+    mapOptions.push(pool[1]);
+  }
+}
+
 function proceedToNextFloor() {
-  if (currentFloor === 3) {
-    generateShopInventory();
-  } else if (currentFloor >= 5) {
+  if (currentFloor >= 5) {
     gameState = "ENDING";
     sfxWin();
   } else {
-    currentFloor++;
-    if (currentFloor === 2) {
-      gameState = "EVENT";
-      eventType = Math.random() < 0.5 ? "altar" : "fountain";
-    } else if (currentFloor === 4) {
-      gameState = "EVENT";
-      eventType = Math.random() < 0.5 ? "merchant" : "mimic";
-    } else {
-      initFloor();
-    }
+    generateMapOptions();
+    gameState = "MAP_SELECT";
   }
 }
 
 
-function calculatePredictedDamage(cData) {
+function calculatePredictedDamage(cData, idx = -1, handLen = 0) {
   let baseDmg = cData.value;
-  let playerFinalPowerBonus = pPower + (pRelics.redGem ? 2 : 0);
+  let playerFinalPowerBonus = pPower + (pRelics.redGem ? 2 : 0) + (pRelics.loopCrown ? 3 : 0);
   
   baseDmg += activeAccuracyBonus;
   
@@ -740,6 +818,11 @@ function calculatePredictedDamage(cData) {
   else if (cData.isShieldSlam) baseDmg = pBlock * (cData.factor || 2);
   else if (cData.strengthSynergy) baseDmg = cData.value + playerFinalPowerBonus + activeAccuracyBonus;
   else if (cData.risky || cData.isOffering) baseDmg = 12 + activeAccuracyBonus;
+  else if (cData.goldSlam) baseDmg = Math.floor(pGold * 0.2);
+  else if (cData.leftBlast) {
+    let actIdx = (idx !== -1) ? idx : playedCardIdx;
+    baseDmg = (actIdx === 0) ? 16 : 6;
+  }
 
   let finalVal = baseDmg;
   if (pWeak > 0) finalVal = Math.floor(finalVal * 0.5);
@@ -823,6 +906,12 @@ function drawEnemySprite(type, x, y) {
     cx.fillStyle = RED; cx.fillRect(x-24, y-30, 48, 40); cx.fillRect(x-12, y-46, 24, 20); 
     cx.fillStyle = YELLOW; cx.fillRect(x-34, y-24, 12, 12); cx.fillRect(x+22, y-24, 12, 12); 
     cx.fillStyle = '#000'; cx.fillRect(x-6, y-38, 3, 4); cx.fillRect(x+3, y-38, 3, 4); 
+  } else if (type === "lich") {
+    cx.fillStyle = '#222'; cx.fillRect(x-14, y-26, 28, 36); 
+    cx.fillStyle = '#402060'; cx.fillRect(x-18, y-10, 36, 20); 
+    cx.fillStyle = '#e0e0e0'; cx.fillRect(x-8, y-28, 16, 14); 
+    cx.fillStyle = '#000'; cx.fillRect(x-5, y-22, 3, 3); cx.fillRect(x+2, y-22, 3, 3); 
+    cx.fillStyle = '#00ffff'; cx.fillRect(x-4, y-21, 1, 1); cx.fillRect(x+3, y-21, 1, 1); 
   }
   cx.restore();
 }
@@ -843,7 +932,10 @@ const STATUS_DESCS = {
   "echoRing": { name: "ECHO RING (反響の指輪)", desc: "各ターンに最初に使用するアタックが2回発動します。" },
   "sneckoSkull": { name: "SNECKO SKULL (スネッコの頭骨)", desc: "敵に毒を付与する時、付与する毒の値が +1 されます。" },
   "mummifiedHand": { name: "MUMMIFIED HAND (ミイラの手)", desc: "パワーカードを使用するたび、手札のランダムなカード1枚のコストを 0 にします。" },
-  "FRAIL": { name: "FRAIL (衰弱)", desc: "防御カードで得られるシールドの値が 50% 減少します。" }
+  "FRAIL": { name: "FRAIL (衰弱)", desc: "防御カードで得られるシールドの値が 50% 減少します。" },
+  "goldBag": { name: "GOLD BAG (商人の金袋)", desc: "戦闘開始時、ゴールドを +5G 得ます。" },
+  "loopCrown":  { name: "LOOP CROWN (ループの王冠)", desc: "恒久的にアタックのダメージが +3 されます。" },
+  "voidStone":  { name: "VOID STONE (虚無の石)", desc: "ターン開始時のエネルギーが +1 されますが、最大HPが 5 減少します。" }
 };
 
 let activeTooltip = null;
@@ -893,46 +985,141 @@ function drawClassSelectUI() {
   px("SELECT YOUR CHARACTER CLASS", W/2, 60, YELLOW, 18, true);
   px("冒険を始めるキャラクターを選択してください", W/2, 90, WHITE, 11, true);
 
-  const boxW = 148, boxH = 210;
+  const boxW = 112, boxH = 210;
   
   // Warrior (戦士)
-  let wX = 24, wY = 130;
+  let wX = 12, wY = 130;
   let isWOver = (mx >= wX && mx <= wX + boxW && my >= wY && my <= wY + boxH);
   cx.fillStyle = isWOver ? '#1f1c2c' : '#111018'; cx.fillRect(wX, wY, boxW, boxH);
   cx.strokeStyle = isWOver ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(wX, wY, boxW, boxH);
   
-  px("WARRIOR", wX + boxW/2, wY + 35, RED, 16, true);
+  px("WARRIOR", wX + boxW/2, wY + 35, RED, 14, true);
   px("戦士", wX + boxW/2, wY + 55, WHITE, 10, true);
-  px("HP: 50  |  NRG: 3", wX + boxW/2, wY + 85, YELLOW, 10, true);
-  px("・攻撃的な初期デッキ", wX + boxW/2, wY + 115, '#bbb', 9, true);
-  px("・大打撃「BASH」を所持", wX + boxW/2, wY + 133, '#bbb', 9, true);
-  px("・初心者向けパワー型", wX + boxW/2, wY + 151, '#bbb', 9, true);
+  px("HP:50/NRG:3", wX + boxW/2, wY + 85, YELLOW, 10, true);
+  px("・攻撃初期デッキ", wX + boxW/2, wY + 115, '#bbb', 8, true);
+  px("・大打撃BASH所持", wX + boxW/2, wY + 133, '#bbb', 8, true);
+  px("・パワー型", wX + boxW/2, wY + 151, '#bbb', 8, true);
   
   // Silent (暗殺者)
-  let sX = 182, sY = 130;
+  let sX = 134, sY = 130;
   let isSOver = (mx >= sX && mx <= sX + boxW && my >= sY && my <= sY + boxH);
   cx.fillStyle = isSOver ? '#1f1c2c' : '#111018'; cx.fillRect(sX, sY, boxW, boxH);
   cx.strokeStyle = isSOver ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(sX, sY, boxW, boxH);
   
-  px("SILENT", sX + boxW/2, sY + 35, GREEN, 16, true);
+  px("SILENT", sX + boxW/2, sY + 35, GREEN, 14, true);
   px("暗殺者", sX + boxW/2, sY + 55, WHITE, 10, true);
-  px("HP: 40  |  NRG: 3", sX + boxW/2, sY + 85, YELLOW, 10, true);
-  px("・毒と手数(SHIV)の連携", sX + boxW/2, sY + 115, '#bbb', 9, true);
-  px("・毒短剣「P-DAGGER」所持", sX + boxW/2, sY + 133, '#bbb', 9, true);
-  px("・テクニカルなコンボ型", sX + boxW/2, sY + 151, '#bbb', 9, true);
+  px("HP:40/NRG:3", sX + boxW/2, sY + 85, YELLOW, 10, true);
+  px("・毒と手数の連携", sX + boxW/2, sY + 115, '#bbb', 8, true);
+  px("・毒短剣P-DAGGER", sX + boxW/2, sY + 133, '#bbb', 8, true);
+  px("・コンボ型", sX + boxW/2, sY + 151, '#bbb', 8, true);
 
   // Mage (魔法使い)
-  let mX = 340, mY = 130;
+  let mX = 256, mY = 130;
   let isMOver = (mx >= mX && mx <= mX + boxW && my >= mY && my <= mY + boxH);
   cx.fillStyle = isMOver ? '#1f1c2c' : '#111018'; cx.fillRect(mX, mY, boxW, boxH);
   cx.strokeStyle = isMOver ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(mX, mY, boxW, boxH);
   
-  px("MAGE", mX + boxW/2, mY + 35, CYAN, 16, true);
+  px("MAGE", mX + boxW/2, mY + 35, CYAN, 14, true);
   px("魔法使い", mX + boxW/2, mY + 55, WHITE, 10, true);
-  px("HP: 35  |  NRG: 3", mX + boxW/2, mY + 85, YELLOW, 10, true);
-  px("・雷と弱体化の制御型", mX + boxW/2, mY + 115, '#bbb', 9, true);
-  px("・0コスト「ZAP」を所持", mX + boxW/2, mY + 133, '#bbb', 9, true);
-  px("・上級者向けデバフ型", mX + boxW/2, mY + 151, '#bbb', 9, true);
+  px("HP:35/NRG:3", mX + boxW/2, mY + 85, YELLOW, 10, true);
+  px("・雷と弱体化制御", mX + boxW/2, mY + 115, '#bbb', 8, true);
+  px("・0コストZAP所持", mX + boxW/2, mY + 133, '#bbb', 8, true);
+  px("・デバフ操作型", mX + boxW/2, mY + 151, '#bbb', 8, true);
+
+  // Merchant (大商人)
+  let mrX = 378, mrY = 130;
+  let isMrOver = (mx >= mrX && mx <= mrX + boxW && my >= mrY && my <= mrX + boxH); // Note: rect check
+  isMrOver = (mx >= mrX && mx <= mrX + boxW && my >= mrY && my <= mrY + boxH);
+  cx.fillStyle = isMrOver ? '#1f1c2c' : '#111018'; cx.fillRect(mrX, mrY, boxW, boxH);
+  cx.strokeStyle = isMrOver ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(mrX, mrY, boxW, boxH);
+  
+  px("MERCHANT", mrX + boxW/2, mrY + 35, YELLOW, 14, true);
+  px("大商人", mrX + boxW/2, mrY + 55, WHITE, 10, true);
+  px("HP:45/NRG:3", mrX + boxW/2, mrY + 85, YELLOW, 10, true);
+  px("・ゴールドを火力に", mrX + boxW/2, mrY + 115, '#bbb', 8, true);
+  px("・お小遣いPAYDAY", mrX + boxW/2, mrY + 133, '#bbb', 8, true);
+  px("・富豪の金袋所持", mrX + boxW/2, mrY + 151, '#bbb', 8, true);
+}
+
+function drawMapSelectUI() {
+  cx.fillStyle = BG; cx.fillRect(0, 0, W, H);
+  px("CHOOSE NEXT PATH", W/2, 60, YELLOW, 18, true);
+  px("進むルートを選択してください", W/2, 90, WHITE, 11, true);
+
+  const boxW = 160, boxH = 100, bY = 160;
+  for (let i = 0; i < mapOptions.length; i++) {
+    let opt = mapOptions[i];
+    let bX = 66 + i * 220;
+    
+    let isHover = (mx >= bX && mx <= bX + boxW && my >= bY && my <= bY + boxH);
+    cx.fillStyle = isHover ? '#222240' : '#141424'; cx.fillRect(bX, bY, boxW, boxH);
+    cx.strokeStyle = isHover ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(bX, bY, boxW, boxH);
+
+    px(opt.label, bX + boxW/2, bY + 35, YELLOW, 14, true);
+    px(opt.desc, bX + boxW/2, bY + 60, WHITE, 9, true);
+    px(`FLOOR ${currentFloor + 1}`, bX + boxW/2, bY + 80, GRAY, 9, true);
+  }
+}
+
+function drawCampfireUI() {
+  cx.fillStyle = BG; cx.fillRect(0, 0, W, H);
+  px("🔥 CAMPFIRE 🔥", W/2, 60, YELLOW, 20, true);
+  px("たき火のそばで英気を養いましょう", W/2, 90, WHITE, 11, true);
+
+  const boxW = 160, boxH = 100, bY = 160;
+  let isHover1 = (mx >= 66 && mx <= 66 + boxW && my >= bY && my <= bY + boxH);
+  let isHover2 = (mx >= 286 && mx <= 286 + boxW && my >= bY && my <= bY + boxH);
+
+  cx.fillStyle = isHover1 ? '#222240' : '#141424'; cx.fillRect(66, bY, boxW, boxH);
+  cx.strokeStyle = isHover1 ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(66, bY, boxW, boxH);
+  px("REST (休息)", 66 + boxW/2, bY + 35, GREEN, 14, true);
+  px("HPを全回復する", 66 + boxW/2, bY + 65, WHITE, 9, true);
+
+  cx.fillStyle = isHover2 ? '#222240' : '#141424'; cx.fillRect(286, bY, boxW, boxH);
+  cx.strokeStyle = isHover2 ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(286, bY, boxW, boxH);
+  px("SMITH (鍛冶)", 286 + boxW/2, bY + 35, RED, 14, true);
+  px("ランダムカード1枚強化", 286 + boxW/2, bY + 65, WHITE, 9, true);
+}
+
+function drawSmithBranchUI() {
+  cx.fillStyle = BG; cx.fillRect(0, 0, W, H);
+  px("CHOOSE UPGRADE DIRECTION", W/2, 60, YELLOW, 18, true);
+  
+  let cardKey = masterDeck[upgradeTargetIdx];
+  let cData = CARD_MASTER[cardKey];
+  px(`CARD: ${cData.name}`, W/2, 100, WHITE, 14, true);
+
+  const boxW = 160, boxH = 100, bY = 160;
+  let isHoverPlus = (mx >= 66 && mx <= 66 + boxW && my >= bY && my <= bY + boxH);
+  let isHoverMinus = (mx >= 286 && mx <= 286 + boxW && my >= bY && my <= bY + boxH);
+
+  let plusKey = cardKey + "+";
+  let plusExists = CARD_MASTER[plusKey] !== undefined;
+  cx.fillStyle = plusExists ? (isHoverPlus ? '#222240' : '#141424') : '#111';
+  cx.strokeStyle = plusExists ? (isHoverPlus ? YELLOW : WHITE) : GRAY;
+  cx.lineWidth = 2;
+  cx.fillRect(66, bY, boxW, boxH);
+  cx.strokeRect(66, bY, boxW, boxH);
+  px("POWER (+)", 66 + boxW/2, bY + 35, plusExists ? RED : GRAY, 12, true);
+  if (plusExists) {
+    px(CARD_MASTER[plusKey].desc, 66 + boxW/2, bY + 65, WHITE, 7, true);
+  } else {
+    px("UNAVAILABLE", 66 + boxW/2, bY + 65, GRAY, 8, true);
+  }
+
+  let minusKey = cardKey + "-";
+  let minusExists = CARD_MASTER[minusKey] !== undefined;
+  cx.fillStyle = minusExists ? (isHoverMinus ? '#222240' : '#141424') : '#111';
+  cx.strokeStyle = minusExists ? (isHoverMinus ? YELLOW : WHITE) : GRAY;
+  cx.lineWidth = 2;
+  cx.fillRect(286, bY, boxW, boxH);
+  cx.strokeRect(286, bY, boxW, boxH);
+  px("LIGHTWEIGHT (-)", 286 + boxW/2, bY + 35, minusExists ? GREEN : GRAY, 12, true);
+  if (minusExists) {
+    px(CARD_MASTER[minusKey].desc, 286 + boxW/2, bY + 65, WHITE, 7, true);
+  } else {
+    px("UNAVAILABLE", 286 + boxW/2, bY + 65, GRAY, 8, true);
+  }
 }
 
 function drawUI() {
@@ -941,6 +1128,18 @@ function drawUI() {
 
   if (gameState === "CLASS_SELECT") {
     drawClassSelectUI();
+    return;
+  }
+  if (gameState === "MAP_SELECT") {
+    drawMapSelectUI();
+    return;
+  }
+  if (gameState === "CAMPFIRE") {
+    drawCampfireUI();
+    return;
+  }
+  if (gameState === "SMITH_BRANCH") {
+    drawSmithBranchUI();
     return;
   }
 
@@ -1012,6 +1211,21 @@ function drawUI() {
   if (pRelics.mummifiedHand) { 
     px("💎[HAND]", rxOffset, 42, WHITE, 9, false); 
     if (mx >= rxOffset && mx <= rxOffset + 45 && my >= 32 && my <= 46) activeTooltip = STATUS_DESCS["mummifiedHand"];
+  }
+  if (pRelics.goldBag) { 
+    rxOffset += 48;
+    px("💎[GBAG]", rxOffset, 42, YELLOW, 9, false); 
+    if (mx >= rxOffset && mx <= rxOffset + 45 && my >= 32 && my <= 46) activeTooltip = STATUS_DESCS["goldBag"];
+  }
+  if (pRelics.loopCrown) {
+    rxOffset += 48;
+    px("💎[CROWN]", rxOffset, 42, YELLOW, 9, false);
+    if (mx >= rxOffset && mx <= rxOffset + 45 && my >= 32 && my <= 46) activeTooltip = STATUS_DESCS["loopCrown"];
+  }
+  if (pRelics.voidStone) {
+    rxOffset += 48;
+    px("💎[VSTON]", rxOffset, 42, PURPLE, 9, false);
+    if (mx >= rxOffset && mx <= rxOffset + 45 && my >= 32 && my <= 46) activeTooltip = STATUS_DESCS["voidStone"];
   }
 
   // ポーションスロットの描画
@@ -1174,25 +1388,32 @@ function drawUI() {
       activeTooltip = { name: cData.name, desc: cData.desc };
     }
 
+    let isPlayable = true;
+    if (cData.centerOnly && i !== Math.floor(hand.length / 2)) {
+      isPlayable = false;
+    }
+
     let displayCost = Math.max(0, cData.cost - nextCardCostMod - (handCostMods[i] || 0));
     cx.fillStyle = '#121222'; cx.fillRect(geom.x, cyPos, geom.w, geom.h);
-    cx.strokeStyle = isHover && gameState === "BATTLE" ? YELLOW : (cData.rare === "RARE" ? PURPLE : (pEnergy >= displayCost ? WHITE : GRAY));
+    cx.strokeStyle = isHover && gameState === "BATTLE" && isPlayable ? YELLOW : (cData.rare === "RARE" ? PURPLE : ((pEnergy >= displayCost && isPlayable) ? WHITE : GRAY));
     cx.lineWidth = cData.rare === "RARE" ? 2 : 1; cx.strokeRect(geom.x, cyPos, geom.w, geom.h);
 
-    cx.fillStyle = BLUE; cx.beginPath(); cx.arc(geom.x+10, cyPos+10, 7, 0, Math.PI*2); cx.fill();
+    cx.fillStyle = isPlayable ? BLUE : GRAY; cx.beginPath(); cx.arc(geom.x+10, cyPos+10, 7, 0, Math.PI*2); cx.fill();
     px(`${displayCost}`, geom.x+7, cyPos+13, WHITE, 9, false);
 
     drawCardIcon(cData.type, geom.x + geom.w/2 - 4, cyPos + 50);
 
-    px(cData.name, geom.x + geom.w/2, cyPos + 26, cData.rare==="RARE"?PURPLE:WHITE, cData.name.length>9?6:9, true);
-    px(`[${cData.type}]`, geom.x + geom.w/2, cyPos + 40, cData.type==="ATK"?RED:CYAN, 8, true);
+    px(cData.name, geom.x + geom.w/2, cyPos + 26, isPlayable ? (cData.rare==="RARE"?PURPLE:WHITE) : GRAY, cData.name.length>9?6:9, true);
+    px(`[${cData.type}]`, geom.x + geom.w/2, cyPos + 40, isPlayable ? (cData.type==="ATK"?RED:CYAN) : GRAY, 8, true);
     
     let displayDesc = cData.desc;
-    let descColor = '#aaa';
+    let descColor = isPlayable ? '#aaa' : GRAY;
     if(cData.type === "ATK") {
-      let pred = calculatePredictedDamage(cData);
+      let pred = calculatePredictedDamage(cData, i, hand.length);
       displayDesc = `ENEMY -${pred} HP`;
-      descColor = (pred > (cData.value + activeAccuracyBonus)) ? YELLOW : ((pred < (cData.value + activeAccuracyBonus)) ? '#88cc88' : WHITE);
+      if (isPlayable) {
+        descColor = (pred > (cData.value + activeAccuracyBonus)) ? YELLOW : ((pred < (cData.value + activeAccuracyBonus)) ? '#88cc88' : WHITE);
+      }
     }
     px(displayDesc, geom.x + geom.w/2, cyPos + 80, descColor, cData.isShieldBash||cData.name.length>9?6:7, true);
   }
@@ -1536,7 +1757,7 @@ function executeCardEffect(cardKey, simulated) {
   if (cData.type === "ATK") baseVal += activeAccuracyBonus;
   
   let finalVal = baseVal;
-  let playerFinalPowerBonus = pPower + (pRelics.redGem ? 2 : 0); 
+  let playerFinalPowerBonus = pPower + (pRelics.redGem ? 2 : 0) + (pRelics.loopCrown ? 3 : 0); 
   if (cData.type === "ATK" && pWeak > 0) finalVal = Math.floor(finalVal * 0.5);
 
   if (cData.type === "ATK") {
@@ -1627,6 +1848,15 @@ function executeCardEffect(cardKey, simulated) {
       }
     } else if (cData.isThunderStrike) {
       baseDmg = combatAtkCount * (cData.factor || 5);
+    } else if (cData.goldSlam) {
+      baseDmg = Math.floor(pGold * 0.2);
+    } else if (cData.leftBlast) {
+      baseDmg = (playedCardIdx === 0) ? 16 : 6;
+    }
+
+    if (cData.payday && !simulated) {
+      pGold += 5;
+      dmgPopups.push({ text: "PAYDAY +5G", x: 100, y: 150, col: YELLOW, frames: 35 });
     }
 
     let dmg = isCrit ? baseDmg * 2 : baseDmg;
@@ -1698,6 +1928,18 @@ function executeCardEffect(cardKey, simulated) {
     }
 
     let blockGain = finalVal;
+    if (cData.rightShield) {
+      blockGain = (playedCardIdx === playedHandLength - 1) ? 12 : 5;
+    }
+    if (cData.bribery && !simulated) {
+      eWeak += 1;
+      dmgPopups.push({ text: "BRIBERY: WEAK 1", x: 380, y: 120, col: GREEN, frames: 35 });
+      if (pGold >= 15) {
+        pGold -= 15;
+        eIntent.value = Math.max(0, eIntent.value - 5);
+        dmgPopups.push({ text: "PAY 15G: ENEMY ATK -5", x: 380, y: 140, col: RED, frames: 35 });
+      }
+    }
     if (cData.exhaustSynergy) {
       if(!simulated) {
         let count = hand.length;
@@ -1819,7 +2061,16 @@ function executeCardEffect(cardKey, simulated) {
     }
   }
 
-  if (!simulated && cData.draw) drawCards(cData.draw);
+  if (!simulated && cData.draw) {
+    if (cData.centerOnly) {
+      if (playedCardIdx === Math.floor(playedHandLength / 2)) {
+        drawCards(cData.draw);
+        dmgPopups.push({ text: "CENTER CHARGE DRAW!", x: 256, y: 240, col: YELLOW, frames: 35 });
+      }
+    } else {
+      drawCards(cData.draw);
+    }
+  }
 }
 
 // ==================== クリック・ロジック ====================
@@ -1841,6 +2092,25 @@ cv.addEventListener('click', e => {
     if (isClickDeep) {
       currentLoop++;
       maxLoopReached = Math.max(maxLoopReached, currentLoop);
+      
+      let unowned = [];
+      if (!pRelics.loopCrown) unowned.push("loopCrown");
+      if (!pRelics.voidStone) unowned.push("voidStone");
+      
+      if (unowned.length > 0) {
+        let rRelic = unowned[Math.floor(Math.random() * unowned.length)];
+        pRelics[rRelic] = true;
+        dmgPopups.push({ text: `LOOP REWARD: ${RELIC_MASTER[rRelic].name}`, x: 256, y: 150, col: YELLOW, frames: 55 });
+        if (rRelic === "voidStone") {
+          pMaxHP = Math.max(10, pMaxHP - 5);
+          pHP = Math.min(pHP, pMaxHP);
+        }
+      } else {
+        pGold += 50;
+        dmgPopups.push({ text: "LOOP BONUS +50G", x: 256, y: 150, col: YELLOW, frames: 55 });
+      }
+
+      masterDeck.push("heavyStrain");
       currentFloor = 1;
       initFloor();
     } else if (isClickTitle) {
@@ -1850,10 +2120,10 @@ cv.addEventListener('click', e => {
   }
 
   if (gameState === "CLASS_SELECT") {
-    const boxW = 148, boxH = 210;
+    const boxW = 112, boxH = 210;
     
     // Warrior
-    let wX = 24, wY = 130;
+    let wX = 12, wY = 130;
     if (mx >= wX && mx <= wX + boxW && my >= wY && my <= wY + boxH) {
       pClass = "WARRIOR";
       pMaxHP = 50; pHP = 50;
@@ -1864,7 +2134,7 @@ cv.addEventListener('click', e => {
     }
     
     // Silent
-    let sX = 182, sY = 130;
+    let sX = 134, sY = 130;
     if (mx >= sX && mx <= sX + boxW && my >= sY && my <= sY + boxH) {
       pClass = "SILENT";
       pMaxHP = 40; pHP = 40;
@@ -1875,7 +2145,7 @@ cv.addEventListener('click', e => {
     }
     
     // Mage
-    let mX = 340, mY = 130;
+    let mX = 256, mY = 130;
     if (mx >= mX && mx <= mX + boxW && my >= mY && my <= mY + boxH) {
       pClass = "MAGE";
       pMaxHP = 35; pHP = 35;
@@ -1883,6 +2153,77 @@ cv.addEventListener('click', e => {
       sfxLvUp();
       initFloor();
       return;
+    }
+
+    // Merchant
+    let mrX = 378, mrY = 130;
+    if (mx >= mrX && mx <= mrX + boxW && my >= mrY && my <= mrY + boxH) {
+      pClass = "MERCHANT";
+      pMaxHP = 45; pHP = 45;
+      masterDeck = ["strike", "strike", "defend", "defend", "payday", "payday", "bribery", "goldSlam"];
+      pRelics.goldBag = true;
+      sfxLvUp();
+      initFloor();
+      return;
+    }
+    return;
+  }
+
+  if (gameState === "MAP_SELECT") {
+    const boxW = 160, boxH = 100, bY = 160;
+    for (let i = 0; i < mapOptions.length; i++) {
+      let bX = 66 + i * 220;
+      if (mx >= bX && mx <= bX + boxW && my >= bY && my <= bY + boxH) {
+        let selectedOpt = mapOptions[i];
+        currentFloor++;
+        sfxRare();
+        if (selectedOpt.type === "BATTLE") {
+          initFloor();
+        } else if (selectedOpt.type === "EVENT") {
+          gameState = "EVENT";
+          eventType = Math.random() < 0.5 ? "altar" : "fountain";
+          if (currentFloor >= 3) {
+            eventType = Math.random() < 0.5 ? "merchant" : "mimic";
+          }
+        } else if (selectedOpt.type === "SHOP") {
+          generateShopInventory();
+        } else if (selectedOpt.type === "CAMPFIRE") {
+          gameState = "CAMPFIRE";
+        }
+        return;
+      }
+    }
+    return;
+  }
+
+  if (gameState === "CAMPFIRE") {
+    const boxW = 160, boxH = 100, bY = 160;
+    // REST
+    if (mx >= 66 && mx <= 66 + boxW && my >= bY && my <= bY + boxH) {
+      pHP = pMaxHP;
+      sfxRare();
+      dmgPopups.push({ text: "REST: HP FULLY HEALED", x: 256, y: 200, col: GREEN, frames: 40 });
+      setTimeout(() => { proceedToNextFloor(); }, 800);
+    }
+    // SMITH
+    else if (mx >= 286 && mx <= 286 + boxW && my >= bY && my <= bY + boxH) {
+      let upgradeables = [];
+      for (let i = 0; i < masterDeck.length; i++) {
+        let k = masterDeck[i];
+        if (CARD_MASTER[k + "+"] !== undefined || CARD_MASTER[k + "-"] !== undefined) {
+          upgradeables.push(i);
+        }
+      }
+      if (upgradeables.length > 0) {
+        let target = upgradeables[Math.floor(Math.random() * upgradeables.length)];
+        upgradeTargetIdx = target;
+        upgradeSource = "CAMPFIRE";
+        gameState = "SMITH_BRANCH";
+        sfxRare();
+      } else {
+        dmgPopups.push({ text: "NO UPGRADEABLE CARDS", x: 256, y: 200, col: GRAY, frames: 35 });
+        setTimeout(() => { proceedToNextFloor(); }, 800);
+      }
     }
     return;
   }
@@ -1990,6 +2331,7 @@ cv.addEventListener('click', e => {
     } else if (mx >= 342 && mx <= 462 && my >= 200 && my <= 260) {
       let upgradeables = masterDeck.filter(k => CARD_MASTER[k + "+"]);
       if (upgradeables.length > 0) {
+        upgradeSource = "LEVELUP";
         gameState = "UPGRADE_SCREEN";
       } else {
         generateRewardOptions();
@@ -2002,17 +2344,54 @@ cv.addEventListener('click', e => {
     let startX = 46, startY = 90;
     for(let i=0; i<masterDeck.length; i++) {
       let cardKey = masterDeck[i];
-      let isUpgradeable = CARD_MASTER[cardKey + "+"] !== undefined;
+      let isUpgradeable = (CARD_MASTER[cardKey + "+"] !== undefined || CARD_MASTER[cardKey + "-"] !== undefined);
       if (!isUpgradeable) continue;
       
       let rX = startX + (i % 5) * 84;
       let rY = startY + Math.floor(i / 5) * 50;
       if (mx >= rX && mx <= rX + 76 && my >= rY && my <= rY + 40) {
-        masterDeck[i] = cardKey + "+"; 
+        upgradeTargetIdx = i;
+        upgradeSource = "LEVELUP";
+        gameState = "SMITH_BRANCH"; 
         sfxRare();
-        generateRewardOptions(); 
         return;
       }
+    }
+    return;
+  }
+
+  if (gameState === "SMITH_BRANCH") {
+    const boxW = 160, boxH = 100, bY = 160;
+    let cardKey = masterDeck[upgradeTargetIdx];
+    let selectedUp = "";
+    
+    // POWER (+)
+    if (mx >= 66 && mx <= 66 + boxW && my >= bY && my <= bY + boxH) {
+      let plusKey = cardKey + "+";
+      if (CARD_MASTER[plusKey] !== undefined) {
+        selectedUp = plusKey;
+      }
+    }
+    // LIGHTWEIGHT (-)
+    else if (mx >= 286 && mx <= 286 + boxW && my >= bY && my <= bY + boxH) {
+      let minusKey = cardKey + "-";
+      if (CARD_MASTER[minusKey] !== undefined) {
+        selectedUp = minusKey;
+      }
+    }
+
+    if (selectedUp !== "") {
+      masterDeck[upgradeTargetIdx] = selectedUp;
+      sfxRare();
+      dmgPopups.push({ text: `UPGRADED: ${CARD_MASTER[selectedUp].name}`, x: 256, y: 200, col: YELLOW, frames: 40 });
+      
+      setTimeout(() => {
+        if (upgradeSource === "CAMPFIRE") {
+          proceedToNextFloor();
+        } else {
+          generateRewardOptions();
+        }
+      }, 800);
     }
     return;
   }
@@ -2071,7 +2450,7 @@ cv.addEventListener('click', e => {
       }
     }
     if (mx >= 206 && mx <= 306 && my >= 330 && my <= 360) {
-      currentFloor++; initFloor();
+      proceedToNextFloor();
     }
     return;
   }
@@ -2129,16 +2508,24 @@ cv.addEventListener('click', e => {
   // 【クリック解決処理の完全修正】
   // selectedIdx は毎フレーム描画ループ内で正確にマウス座標から再取得されているため、ここでの再走査は不要です。
   if (selectedIdx !== -1 && selectedIdx < hand.length) {
-    const targetIdx = selectedIdx; // 割り込みによるインデックスズレを防止
+    const targetIdx = selectedIdx; 
     const cardKey = hand[targetIdx];
     const cData = CARD_MASTER[cardKey];
+
+    if (cData.centerOnly && targetIdx !== Math.floor(hand.length / 2)) {
+      beep(140, 0.08, 'square', 0.1);
+      dmgPopups.push({ text: "CENTER ONLY", x: 256, y: 300, col: RED, frames: 30 });
+      return;
+    }
 
     let currentCost = Math.max(0, cData.cost - nextCardCostMod - (handCostMods[targetIdx] || 0));
     if (pEnergy >= currentCost) {
       pEnergy -= currentCost;
-      if (nextCardCostMod > 0) nextCardCostMod = 0; // コスト軽減バフを消費
+      if (nextCardCostMod > 0) nextCardCostMod = 0; 
       
-      // 先に手札から配列を安全に抜く
+      playedCardIdx = targetIdx;
+      playedHandLength = hand.length;
+
       hand.splice(targetIdx, 1);
       handCostMods.splice(targetIdx, 1);
       
