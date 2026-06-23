@@ -217,6 +217,7 @@ let combatAtkCount = 0;
 let pFrail = 0;
 let activeMeldingTriggered = false;
 let activeOrcChallenge = false;
+let pClass = "";
 let eventType = "";
 
 const POTION_MASTER = {
@@ -1283,10 +1284,41 @@ function drawUI() {
   }
 
   if (gameState === "ENDING") {
-    cx.fillStyle = 'rgba(10,25,10,0.95)'; cx.fillRect(0, 0, W, H);
-    px("👑 CONGRATULATIONS! 👑", W/2, H/2 - 50, YELLOW, 24, true);
-    px("THE DRAGON IS SLAIN AND REALM SAVED.", W/2, H/2 - 10, WHITE, 14, true);
-    px("- CLICK TO TITLE PLAY AGAIN -", W/2, H/2 + 60, CYAN, 11, true);
+    cx.fillStyle = 'rgba(5,15,10,0.97)'; cx.fillRect(0, 0, W, H);
+    px("👑 CONGRATULATIONS! 👑", W/2, 60, YELLOW, 20, true);
+    
+    let classMsg = "REALM SAVED.";
+    if (pClass === "WARRIOR") classMsg = "THE MIGHTY WARRIOR SLAIN THE DRAGON!";
+    else if (pClass === "SILENT") classMsg = "THE SILENT VANISHED INTO THE SHADOWS.";
+    else if (pClass === "MAGE") classMsg = "THE WISE MAGE UNLOCKED THE ARCANE SECRETS.";
+    px(classMsg, W/2, 90, WHITE, 11, true);
+
+    // 統計情報の描画
+    px("--- GAME STATS ---", W/2, 130, YELLOW, 11, true);
+    px(`HP: ${pHP}/${pMaxHP}   /   GOLD: ${pGold}G   /   LEVEL: ${pLv}`, W/2, 155, WHITE, 10, true);
+
+    // 所持レリックの表示
+    let activeRelicNames = [];
+    Object.keys(pRelics).forEach(k => {
+      if (pRelics[k] && RELIC_MASTER[k]) {
+        activeRelicNames.push(`[${RELIC_MASTER[k].name}]`);
+      }
+    });
+    let relicDisplay = activeRelicNames.join(" ") || "[NONE]";
+    px(`RELICS: ${relicDisplay}`, W/2, 185, CYAN, 9, true);
+
+    // デッキの要約表示
+    let cardSummary = {};
+    masterDeck.forEach(k => {
+      let name = CARD_MASTER[k].name;
+      cardSummary[name] = (cardSummary[name] || 0) + 1;
+    });
+    let deckText = Object.keys(cardSummary).map(name => `${name}x${cardSummary[name]}`).join(", ");
+    if (deckText.length > 60) deckText = deckText.substring(0, 57) + "...";
+    px(`DECK (${masterDeck.length} cards):`, W/2, 215, YELLOW, 9, true);
+    px(deckText || "empty", W/2, 235, WHITE, 8, true);
+
+    px("- CLICK TO TITLE PLAY AGAIN -", W/2, 280, CYAN, 10, true);
   }
 
   // イベント画面
@@ -1723,6 +1755,7 @@ cv.addEventListener('click', e => {
     // Warrior
     let wX = 24, wY = 130;
     if (mx >= wX && mx <= wX + boxW && my >= wY && my <= wY + boxH) {
+      pClass = "WARRIOR";
       pMaxHP = 50; pHP = 50;
       masterDeck = ["strike", "strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "bash", "quick"];
       sfxLvUp();
@@ -1733,6 +1766,7 @@ cv.addEventListener('click', e => {
     // Silent
     let sX = 182, sY = 130;
     if (mx >= sX && mx <= sX + boxW && my >= sY && my <= sY + boxH) {
+      pClass = "SILENT";
       pMaxHP = 40; pHP = 40;
       masterDeck = ["strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "defend", "quick", "quick", "poisonD"];
       sfxLvUp();
@@ -1743,6 +1777,7 @@ cv.addEventListener('click', e => {
     // Mage
     let mX = 340, mY = 130;
     if (mx >= mX && mx <= mX + boxW && my >= mY && my <= mY + boxH) {
+      pClass = "MAGE";
       pMaxHP = 35; pHP = 35;
       masterDeck = ["strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "zap", "zap", "charge"];
       sfxLvUp();
