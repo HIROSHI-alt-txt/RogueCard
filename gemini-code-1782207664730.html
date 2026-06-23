@@ -218,6 +218,11 @@ let pFrail = 0;
 let activeMeldingTriggered = false;
 let activeOrcChallenge = false;
 let pClass = "";
+let currentLoop = 1;
+let maxLoopReached = 1;
+let activeSlimeSplitted = false;
+let slimeChildHP1 = 0;
+let slimeChildHP2 = 0;
 let eventType = "";
 
 const POTION_MASTER = {
@@ -258,9 +263,8 @@ function decideEnemyIntent() {
     if (eTurnCount % 3 === 0) eIntent = { action: "ATTACK", type: "⚔️", name: "SHARP CLAW", value: 4, poison: 1, frail: 1 };
     else eIntent = { action: "ATTACK", type: "⚔️", name: "RUSH", value: 5 };
   } else if (eType === "slime") {
-    if (eHP <= (eMaxHP / 2) && !activeMeldingTriggered) {
-      activeMeldingTriggered = true;
-      eIntent = { action: "DEFEND", type: "🧬", name: "MELDING", value: 0 };
+    if (eHP <= (eMaxHP / 2) && !activeSlimeSplitted) {
+      eIntent = { action: "DEFEND", type: "🧬", name: "SPLIT", value: 0 };
     } else {
       if (eTurnCount % 2 === 1) eIntent = { action: "DEFEND", type: "🛡️", name: "SLIME SHIELD", value: 8 };
       else eIntent = { action: "ATTACK", type: "⚔️", name: "TACKLE", value: 6 };
@@ -281,6 +285,22 @@ function decideEnemyIntent() {
     else if (eTurnCount % 3 === 2) eIntent = { action: "DEFEND", type: "🛡️", name: "SCALE GUARD", value: isPhase2 ? 8 : 14 };
     else eIntent = { action: "ATTACK", type: "⚔️", name: isPhase2 ? "VENOM BITE" : "BITE", value: 10, poison: isPhase2 ? 2 : 0 };
   }
+  
+  // スライムの加勢攻撃スケーリング (+4 x 生存数)
+  if (eType === "slime" && eIntent.action === "ATTACK") {
+    let childBonus = (slimeChildHP1 > 0 ? 4 : 0) + (slimeChildHP2 > 0 ? 4 : 0);
+    if (childBonus > 0) {
+      eIntent.value += childBonus;
+      eIntent.name = `TACKLE (+${childBonus})`;
+    }
+  }
+
+  // 攻撃力スケーリング: LOOP 1 = 1.0, LOOP 2 = 1.3, LOOP 3 = 1.6 ...
+  if (eIntent.action === "ATTACK" && eIntent.value > 0) {
+    let dmgMultiplier = 1 + (currentLoop - 1) * 0.3;
+    eIntent.value = Math.floor(eIntent.value * dmgMultiplier);
+  }
+  
   // DRAGON ANCIENT POWER: フェーズ2で毎ターンATK+3
   if (eType === "dragon" && ePhase2Triggered && ePhase2Gimmick === "ancient_power" && eIntent.action === "ATTACK") {
     let powerStacks = Math.max(0, eTurnCount - 3) * 3;
@@ -525,7 +545,14 @@ function runEnemyTurn() {
       }
 
     } else if (eIntent.action === "DEFEND") {
-      if (eIntent.name === "MELDING") {
+      if (eIntent.name === "SPLIT") {
+        activeSlimeSplitted = true;
+        slimeChildHP1 = 10;
+        slimeChildHP2 = 10;
+        ePoison = 0; // 親の毒などのデバフをクリア
+        eWeak = eVuln = 0;
+        dmgPopups.push({ text: "SPLIT: 2 MINI-SLIMES SPAWNED", x: 256, y: 170, col: CYAN, frames: 60 });
+      } else if (eIntent.name === "MELDING") {
         eHP = Math.min(eMaxHP, eHP + 15);
         ePoison = 0;
         eWeak = eVuln = 0;
@@ -631,16 +658,34 @@ function initGame() {
   pFrail = 0;
   activeMeldingTriggered = false;
   activeOrcChallenge = false;
+  currentLoop = 1;
+  activeSlimeSplitted = false;
+  slimeChildHP1 = 0;
+  slimeChildHP2 = 0;
   gameState = "CLASS_SELECT";
 }
 
 function initFloor() {
   gameState = "BATTLE";
   const t = ENEMY_TEMPLATES[currentFloor] || ENEMY_TEMPLATES[1];
-  eName = t.name; eHP = t.hp; eMaxHP = t.hp; eBlock = 0; eType = t.type; eExpReward = t.exp; eTurnCount = 0;
+  eName = t.name; 
+  
+  // HPスケーリング: LOOP 1 = 1.0, LOOP 2 = 1.5, LOOP 3 = 2.0 ...
+  let hpMultiplier = 1 + (currentLoop - 1) * 0.5;
+  let finalHP = Math.floor(t.hp * hpMultiplier);
+  eHP = finalHP; eMaxHP = finalHP;
+  
+  eBlock = 0; eType = t.type; eExpReward = t.exp; eTurnCount = 0;
   ePoison = pRelics.funnel ? 3 : 0; 
   eWeak = eVuln = 0;
-  eThorns = (t.type === "orc") ? 3 : 0; 
+  
+  // LOOP 2以上で敵が最初からトゲ（Thorns）を持つ
+  let loopThorns = currentLoop >= 2 ? (currentLoop - 1) : 0;
+  eThorns = ((t.type === "orc") ? 3 : 0) + loopThorns; 
+  
+  // LOOP 4以上で敵が最初からシールドを持つ
+  if (currentLoop >= 4) eBlock = (currentLoop - 3) * 5;
+
   ePhase2Triggered = false;
   isFirstTurnOfCombat = true;
   combatAtkCount = 0;
@@ -648,6 +693,9 @@ function initFloor() {
   pFrail = 0;
   activeMeldingTriggered = false;
   activeOrcChallenge = false;
+  activeSlimeSplitted = false;
+  slimeChildHP1 = 0;
+  slimeChildHP2 = 0;
   
   deck = [...masterDeck];
   hand = []; discard = [];
@@ -750,6 +798,19 @@ function drawEnemySprite(type, x, y) {
   } else if (type === "slime") {
     cx.fillStyle = '#08d'; cx.beginPath(); cx.ellipse(x, y-5, 22, 16, 0, 0, Math.PI*2); cx.fill();
     cx.fillStyle = WHITE; cx.fillRect(x-8, y-8, 4, 4); cx.fillRect(x+4, y-8, 4, 4);
+    
+    // 子スライム1 (左下)
+    if (slimeChildHP1 > 0) {
+      cx.fillStyle = '#5af'; cx.beginPath(); cx.ellipse(x-30, y+10, 10, 8, 0, 0, Math.PI*2); cx.fill();
+      cx.fillStyle = WHITE; cx.fillRect(x-33, y+8, 2, 2); cx.fillRect(x-29, y+8, 2, 2);
+      px(`${slimeChildHP1}`, x-30, y+25, GREEN, 7, true);
+    }
+    // 子スライム2 (右下)
+    if (slimeChildHP2 > 0) {
+      cx.fillStyle = '#5af'; cx.beginPath(); cx.ellipse(x+30, y+10, 10, 8, 0, 0, Math.PI*2); cx.fill();
+      cx.fillStyle = WHITE; cx.fillRect(x+27, y+8, 2, 2); cx.fillRect(x+31, y+8, 2, 2);
+      px(`${slimeChildHP2}`, x+30, y+25, GREEN, 7, true);
+    }
   } else if (type === "orc") {
     cx.fillStyle = '#574'; cx.fillRect(x-16, y-26, 32, 36);
     cx.fillStyle = '#342'; cx.fillRect(x-22, y-10, 6, 16); 
@@ -883,7 +944,8 @@ function drawUI() {
     return;
   }
 
-  px(`FLOOR ${currentFloor}/5`, 20, 25, WHITE, 12, false);
+  let loopStr = currentLoop > 1 ? ` (LOOP ${currentLoop})` : "";
+  px(`FLOOR ${currentFloor}/5${loopStr}`, 20, 25, WHITE, 12, false);
   px(`LV ${pLv} (EXP:${pExp}/${pLv*25})`, 110, 25, YELLOW, 11, false);
   px(`GOLD:${pGold}G`, 240, 25, YELLOW, 12, false);
 
@@ -1280,22 +1342,25 @@ function drawUI() {
 
   if (gameState === "GAMEOVER") {
     cx.fillStyle = 'rgba(0,0,0,0.85)'; cx.fillRect(0, 0, W, H);
-    px("YOU DIED", W/2, H/2 - 20, RED, 26, true); px("CLICK TO RESTART", W/2, H/2 + 20, WHITE, 12, true);
+    px("YOU DIED", W/2, H/2 - 30, RED, 26, true);
+    px(`REACHED: FLOOR ${currentFloor} (LOOP ${currentLoop})`, W/2, H/2 + 5, WHITE, 11, true);
+    px(`MAX LOOP RECORD: ${maxLoopReached}`, W/2, H/2 + 25, YELLOW, 11, true);
+    px("CLICK TO RESTART", W/2, H/2 + 65, GRAY, 11, true);
   }
 
   if (gameState === "ENDING") {
     cx.fillStyle = 'rgba(5,15,10,0.97)'; cx.fillRect(0, 0, W, H);
-    px("👑 CONGRATULATIONS! 👑", W/2, 60, YELLOW, 20, true);
+    px("👑 CONGRATULATIONS! 👑", W/2, 45, YELLOW, 20, true);
     
     let classMsg = "REALM SAVED.";
     if (pClass === "WARRIOR") classMsg = "THE MIGHTY WARRIOR SLAIN THE DRAGON!";
     else if (pClass === "SILENT") classMsg = "THE SILENT VANISHED INTO THE SHADOWS.";
     else if (pClass === "MAGE") classMsg = "THE WISE MAGE UNLOCKED THE ARCANE SECRETS.";
-    px(classMsg, W/2, 90, WHITE, 11, true);
+    px(classMsg, W/2, 70, WHITE, 11, true);
 
     // 統計情報の描画
-    px("--- GAME STATS ---", W/2, 130, YELLOW, 11, true);
-    px(`HP: ${pHP}/${pMaxHP}   /   GOLD: ${pGold}G   /   LEVEL: ${pLv}`, W/2, 155, WHITE, 10, true);
+    px("--- GAME STATS ---", W/2, 105, YELLOW, 11, true);
+    px(`HP: ${pHP}/${pMaxHP}  /  GOLD: ${pGold}G  /  LEVEL: ${pLv}  /  LOOP: ${currentLoop}`, W/2, 125, WHITE, 10, true);
 
     // 所持レリックの表示
     let activeRelicNames = [];
@@ -1305,7 +1370,7 @@ function drawUI() {
       }
     });
     let relicDisplay = activeRelicNames.join(" ") || "[NONE]";
-    px(`RELICS: ${relicDisplay}`, W/2, 185, CYAN, 9, true);
+    px(`RELICS: ${relicDisplay}`, W/2, 150, CYAN, 9, true);
 
     // デッキの要約表示
     let cardSummary = {};
@@ -1315,10 +1380,20 @@ function drawUI() {
     });
     let deckText = Object.keys(cardSummary).map(name => `${name}x${cardSummary[name]}`).join(", ");
     if (deckText.length > 60) deckText = deckText.substring(0, 57) + "...";
-    px(`DECK (${masterDeck.length} cards):`, W/2, 215, YELLOW, 9, true);
-    px(deckText || "empty", W/2, 235, WHITE, 8, true);
+    px(`DECK (${masterDeck.length} cards):`, W/2, 175, YELLOW, 9, true);
+    px(deckText || "empty", W/2, 192, WHITE, 8, true);
 
-    px("- CLICK TO TITLE PLAY AGAIN -", W/2, 280, CYAN, 10, true);
+    // 選択肢ボタン
+    let isHoverDeep = (mx >= 60 && mx <= 230 && my >= 240 && my <= 280);
+    let isHoverTitle = (mx >= 282 && mx <= 452 && my >= 240 && my <= 280);
+
+    cx.fillStyle = isHoverDeep ? '#1a331a' : '#0d1a0d'; cx.fillRect(60, 240, 170, 40);
+    cx.strokeStyle = GREEN; cx.strokeRect(60, 240, 170, 40);
+    px("ENTER THE DEEP (LOOP +1)", 145, 264, WHITE, 9, true);
+
+    cx.fillStyle = isHoverTitle ? '#331a1a' : '#1a0d0d'; cx.fillRect(282, 240, 170, 40);
+    cx.strokeStyle = RED; cx.strokeRect(282, 240, 170, 40);
+    px("RETURN TO TITLE", 367, 264, WHITE, 9, true);
   }
 
   // イベント画面
@@ -1558,14 +1633,26 @@ function executeCardEffect(cardKey, simulated) {
     if (eType && eVuln > 0) dmg = Math.floor(dmg * 1.5);
 
     if (dmg > 0) {
-      if (eBlock >= dmg) {
-        eBlock -= dmg;
-        if(!simulated) dmgPopups.push({ text: "ENEMY BLOCKED", x: 380, y: 160, col: "#00c8d0", frames: 40 });
+      if (eType === "slime" && (slimeChildHP1 > 0 || slimeChildHP2 > 0)) {
+        if (slimeChildHP1 > 0) {
+          let actualDmg = Math.min(slimeChildHP1, dmg);
+          slimeChildHP1 -= actualDmg;
+          dmgPopups.push({ text: `MINI-SLIME 1: -${actualDmg}`, x: 340, y: 200, col: CYAN, frames: 35 });
+        } else if (slimeChildHP2 > 0) {
+          let actualDmg = Math.min(slimeChildHP2, dmg);
+          slimeChildHP2 -= actualDmg;
+          dmgPopups.push({ text: `MINI-SLIME 2: -${actualDmg}`, x: 420, y: 200, col: CYAN, frames: 35 });
+        }
       } else {
-        dmg -= eBlock; eBlock = 0; eHP -= dmg;
-        if(!simulated) {
-          let popText = isCrit ? `💥CRITICAL! -${dmg}` : `-${dmg}`;
-          dmgPopups.push({ text: popText, x: 380, y: 150, col: isCrit ? YELLOW : RED, frames: 45 });
+        if (eBlock >= dmg) {
+          eBlock -= dmg;
+          if(!simulated) dmgPopups.push({ text: "ENEMY BLOCKED", x: 380, y: 160, col: "#00c8d0", frames: 40 });
+        } else {
+          dmg -= eBlock; eBlock = 0; eHP -= dmg;
+          if(!simulated) {
+            let popText = isCrit ? `💥CRITICAL! -${dmg}` : `-${dmg}`;
+            dmgPopups.push({ text: popText, x: 380, y: 150, col: isCrit ? YELLOW : RED, frames: 45 });
+          }
         }
       }
     }
@@ -1747,7 +1834,20 @@ cv.addEventListener('click', e => {
   mx = (e.clientX - rect.left) * (512 / rect.width);
   my = (e.clientY - rect.top) * (460 / rect.height);
 
-  if (gameState === "GAMEOVER" || gameState === "ENDING") { initGame(); return; }
+  if (gameState === "GAMEOVER") { initGame(); return; }
+  if (gameState === "ENDING") {
+    let isClickDeep = (mx >= 60 && mx <= 230 && my >= 240 && my <= 280);
+    let isClickTitle = (mx >= 282 && mx <= 452 && my >= 240 && my <= 280);
+    if (isClickDeep) {
+      currentLoop++;
+      maxLoopReached = Math.max(maxLoopReached, currentLoop);
+      currentFloor = 1;
+      initFloor();
+    } else if (isClickTitle) {
+      initGame();
+    }
+    return;
+  }
 
   if (gameState === "CLASS_SELECT") {
     const boxW = 148, boxH = 210;
