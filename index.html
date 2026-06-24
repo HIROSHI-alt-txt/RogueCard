@@ -19,24 +19,74 @@
   object-fit: contain;
 }
 .gw .hint{font-size:12px;color:#aaa;font-family:monospace;text-align:center;line-height:1.6;}
+.save-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  background: #1a1a24;
+  padding: 12px;
+  border: 1px solid #333;
+  border-radius: 4px;
+  width: 742px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.save-panel input {
+  width: 100%;
+  padding: 6px;
+  background: #000;
+  border: 1px solid #555;
+  color: #0f0;
+  font-family: monospace;
+  font-size: 12px;
+  text-align: center;
+}
+.save-panel .btns {
+  display: flex;
+  gap: 15px;
+}
+.save-panel button {
+  background: #222;
+  color: #eee;
+  border: 1px solid #aaa;
+  padding: 5px 15px;
+  cursor: pointer;
+  font-family: sans-serif;
+  font-size: 12px;
+}
+.save-panel button:hover {
+  background: #f0d000;
+  color: #000;
+  border-color: #f0d000;
+}
 </style>
 </head>
 <body style="background:#111;color:#eee;margin:0;padding:10px;font-family:sans-serif;">
 <div class="gw">
 <canvas id="gc" width="768" height="690"></canvas>
 <p class="hint">
-    【マウスクリック完全修正版】手札カードの座標判定と、クリックイベントの処理タイミングを徹底デバッグ。<br>
-    ホバーしたカードを確実にクリックでプレイ・発動できるようになりました！
+    【セーブ＆ロード対応・バグ修正版】<br>
+    Basecamp画面で「PROCEED」および「FORGE」ボタンがクリックできなかった判定バグを修正しました。<br>
+    画面下のパネルから進行状況の保存・再開が可能です。
 </p>
+
+<div class="save-panel">
+  <input type="text" id="saveCode" placeholder="ここにセーブコードが出力されます / 再開時はここに貼り付けます" onclick="this.select()">
+  <div class="btns">
+    <button onclick="exportSaveCode()">セーブコードを出力</button>
+    <button onclick="importSaveCode()">セーブコードからロード</button>
+  </div>
+</div>
 </div>
 
 <script>
+// --- main.js ---
 const cv=document.getElementById('gc'), cx=cv.getContext('2d');
 const W=512, H=460;
 let audioCtx=null;
-
 function getAudio(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();return audioCtx;}
-
 function beep(freq,dur,type='square',vol=0.1,delay=0){
   try{
     const a=getAudio(),o=a.createOscillator(),g=a.createGain();
@@ -47,7 +97,6 @@ function beep(freq,dur,type='square',vol=0.1,delay=0){
     o.start(a.currentTime+delay);o.stop(a.currentTime+delay+dur+0.01);
   }catch(e){}
 }
-
 function sfxDraw(){ beep(600,0.04,'triangle',0.06); beep(800,0.04,'triangle',0.06,0.03); }
 function sfxAttack(){ beep(150,0.12,'sawtooth',0.12); beep(90,0.08,'sawtooth',0.1,0.04); }
 function sfxDefend(){ beep(523,0.05,'sine',0.12); beep(659,0.08,'sine',0.1,0.03); }
@@ -58,165 +107,49 @@ function sfxRare(){ [440,554,659,880,1109].forEach((f,i)=>beep(f,0.05,'square',0
 function sfxRarePower(){ [587,698,880,1175].forEach((f,i)=>beep(f,0.06,'square',0.08,i*0.05)); }
 function sfxLvUp(){ [523,659,784,1047,1319].forEach((f,i)=>beep(f,0.06,'square',0.1,i*0.05)); }
 function sfxDeath(){ beep(120,0.4,'sawtooth',0.2); beep(80,0.3,'sawtooth',0.2,0.1); }
-
+// ==================== シードシステム ====================
+let gameSeed = "";
+let rngState = 1;
+function setSeed(s) {
+  gameSeed = s.toUpperCase();
+  let hash = 0;
+  for (let i = 0; i < gameSeed.length; i++) {
+    hash = (hash << 5) - hash + gameSeed.charCodeAt(i);
+    hash |= 0;
+  }
+  rngState = hash === 0 ? 1 : hash;
+}
+function gameRandom() {
+  let x = Math.sin(rngState++) * 10000;
+  return x - Math.floor(x);
+}
+function generateRandomSeed() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let s = "";
+  for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  s += "-";
+  for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
 // ==================== データ＆状態管理 ====================
-const CARD_MASTER = {
-  strike: { name: "STRIKE", cost: 1, type: "ATK", value: 6, desc: "ENEMY -6 HP", rare: "COMMON" },
-  defend: { name: "DEFEND", cost: 1, type: "DEF", value: 5, desc: "BLOCK +5", rare: "COMMON" },
-  bash:   { name: "BASH",   cost: 2, type: "ATK", value: 10, desc: "ENEMY -10 HP", rare: "COMMON", innate: true },
-  quick:  { name: "QUICK",  cost: 0, type: "ATK", value: 2, desc: "DMG 2 / DRAW 1", rare: "COMMON", draw: 1 },
-  focus:  { name: "FOCUS",  cost: 1, type: "DRW", value: 2, desc: "DRAW 2 CARDS", rare: "COMMON", draw: 2 },
-  poisonD:{ name: "P-DAGGER",cost: 1, type: "ATK", value: 3, desc: "DMG 3 / POISON 3", rare: "RARE", poison: 3 },
-  sbash:  { name: "S-BASH", cost: 2, type: "ATK", value: 0, desc: "DMG=BLOCK*70%(REQ>0)", rare: "RARE", isShieldBash: true },
-  rage:   { name: "RAGE",    cost: 1, type: "POW", value: 3, desc: "ATK+3 / LOSE BLK", rare: "RARE" },
-  heal:   { name: "MEDIC",   cost: 1, type: "HEAL",value: 8, desc: "YOU +8 HP", rare: "RARE" },
-  execute:{ name: "EXECUTE", cost: 1, type: "ATK", value: 5, desc: "IF ENEMY HP<=50%:20DMG", rare: "RARE", isExecute: true },
-  fortress:{ name: "FORTRESS",cost: 1, type: "ATK", value: 4, desc: "DMG 4 + 50% MY BLOCK", rare: "COMMON", isFortress: true },
-  toxicE: { name: "TOXIC-E", cost: 1, type: "ATK", value: 4, desc: "DMG 4 + POISON*3", rare: "RARE", isToxicDmg: true },
-  vampStrike: { name: "VAMP BLOW", cost: 2, type: "ATK", value: 9, desc: "DMG 9 / HEAL 40% DMG", rare: "RARE", vamp: 0.4 },
-  bBlast:     { name: "B-BLAST",   cost: 2, type: "ATK", value: 6, desc: "DMG = 6 + MY BLOCK", rare: "RARE", isBarrierBlast: true },
-  pNova:      { name: "P-NOVA",    cost: 2, type: "ATK", value: 4, desc: "DMG 4 / POISON 5 / BLK+6", rare: "RARE", poison: 5, addBlock: 6 },
-  pDraw:      { name: "P-DRAW",    cost: 1, type: "POW", value: 1, desc: "POWER +1 / DRAW 2", rare: "RARE", draw: 2 },
-  
-  // -------------------- 第1弾コンボカード --------------------
-  heavyStrike: { name: "HEAVY STRIKE", cost: 2, type: "ATK", value: 12, desc: "DMG 12 / +1 POW if STRGT", rare: "RARE", strengthSynergy: true },
-  bodySlam:    { name: "BODY SLAM",    cost: 1, type: "ATK", value: 0,  desc: "DMG = CURRENT BLOCK", rare: "RARE", isBodySlam: true },
-  ironSkin:    { name: "IRON SKIN",    cost: 1, type: "POW", value: 3,  desc: "BLOCK +3 when DISCARD", rare: "RARE", ironSkin: true },
-  ruptures:    { name: "RUPTURES",     cost: 1, type: "POW", value: 0,  desc: "ATK played -> +1 POWER", rare: "RARE", ruptures: true },
-  catalyst:    { name: "CATALYST",     cost: 2, type: "ATK", value: 0,  desc: "DOUBLE ENEMY POISON", rare: "RARE", isCatalyst: true },
-  secondWind:  { name: "SECOND WIND",   cost: 2, type: "DEF", value: 8,  desc: "BLK 8 / EXHAUST HAND", rare: "RARE", exhaustSynergy: true },
-  dualWield:   { name: "DUAL WIELD",   cost: 1, type: "POW", value: 0,  desc: "COPY random ATK to hand", rare: "RARE", dualWield: true },
-  wildSwing:   { name: "WILD SWING",   cost: 1, type: "ATK", value: 14, desc: "DMG 14 / 30% SELF DMG 4", rare: "COMMON", risky: true },
-
-  // -------------------- 第2弾コンボカード --------------------
-  adrenaline:  { name: "ADRENALINE",   cost: 0, type: "POW", value: 0,  desc: "NRG +2 / NEXT TURN -1", rare: "RARE", adrenaline: true },
-  flameBarrier:{ name: "FLAME BARRIER",cost: 2, type: "DEF", value: 12, desc: "BLOCK 12 / REFLECT 6", rare: "RARE", reflectPower: 6 },
-  offering:    { name: "OFFERING",     cost: 1, type: "ATK", value: 12, desc: "DMG 12 / LOSE 3 HP", rare: "RARE", isOffering: true },
-  carnage:     { name: "CARNAGE",      cost: 2, type: "ATK", value: 18, desc: "DMG 18 / EXHAUST", rare: "RARE", exhaust: true },
-  accuracy:    { name: "ACCURACY",     cost: 1, type: "POW", value: 0,  desc: "ALL ATK CARDS +3 DMG", rare: "RARE", accuracyBuff: 3 },
-  infiniteBlades:{ name: "INF BLADES", cost: 1, type: "POW", value: 0,  desc: "EVERY TURN ADD 1 SHIV", rare: "RARE", shivGen: true },
-  darkEmbrace: { name: "DARK EMBRACE", cost: 2, type: "POW", value: 0,  desc: "WHEN EXHAUST, DRAW 1", rare: "RARE", darkEmbrace: true },
-  biVamp:      { name: "BI-VAMP",      cost: 2, type: "ATK", value: 7,  desc: "DMG 7 / VAMP 50%/POIS 2", rare: "RARE", vamp: 0.5, poison: 2 },
-  
-  // -------------------- 起爆拡張カード (フェーズ1) --------------------
-  poisonBurst: { name: "POISON BURST", cost: 2, type: "ATK", value: 0, desc: "ENEMY POISON x2", rare: "RARE", isPoisonBurst: true, factor: 2 },
-  shieldSlam:  { name: "SHIELD SLAM",  cost: 1, type: "ATK", value: 0, desc: "LOSE BLK / DMG=BLK*2", rare: "RARE", isShieldSlam: true, factor: 2 },
-
-  // -------------------- 廃棄・呪いカード (フェーズ2) --------------------
-  regret:      { name: "REGRET",       cost: 9, type: "CURS", value: 0, desc: "UNPLAYABLE / T-END TAKE 2 DMG", rare: "COMMON" },
-  decay:       { name: "DECAY",        cost: 9, type: "CURS", value: 0, desc: "UNPLAYABLE / DISC TAKE 3 DMG", rare: "COMMON" },
-  wound:       { name: "WOUND",        cost: 9, type: "CURS", value: 0, desc: "UNPLAYABLE / NO EFFECT", rare: "COMMON" },
-  burn:        { name: "BURN",         cost: 9, type: "CURS", value: 0, desc: "UNPLAYABLE / T-END TAKE 1 DMG", rare: "COMMON" },
-  trueGrit:    { name: "TRUE GRIT",    cost: 1, type: "DEF",  value: 4, desc: "BLK 4 / EXHAUST RAND / DRAW 1", rare: "COMMON", isTrueGrit: true, draw: 1 },
-  feelNoPain:  { name: "FEEL NO PAIN", cost: 1, type: "POW",  value: 3, desc: "WHEN EXHAUST, BLOCK +3", rare: "RARE", feelNoPain: true },
-
-  // -------------------- MAGEクラス専用カード --------------------
-  zap:         { name: "ZAP",       cost: 0, type: "ATK", value: 7,  desc: "DMG 7", rare: "COMMON" },
-  charge:      { name: "CHARGE",    cost: 1, type: "POW", value: 1,  desc: "POW +1 / BLK +5", rare: "COMMON", chargeBlock: 5 },
-  lightningOrb:{ name: "LIGHTNING", cost: 1, type: "ATK", value: 8,  desc: "DMG 8 / WEAK 1", rare: "RARE", applyWeak: 1 },
-  chill:       { name: "CHILL",     cost: 1, type: "ATK", value: 4,  desc: "DMG 4 / VULN 2", rare: "RARE", vuln: 2 },
-
-  // -------------------- 天賦・保留カード (フェーズA) --------------------
-  ghostlyArmor:{ name: "G-ARMOR",      cost: 1, type: "DEF",  value: 10, desc: "BLOCK 10 / RETAIN", rare: "RARE", retain: true },
-
-  // -------------------- 新カード (拡張) --------------------
-  inflame:      { name: "INFLAME",      cost: 1, type: "POW", value: 2,  desc: "STRENGTH +2", rare: "RARE", isInflame: true },
-  armaments:    { name: "ARMAMENTS",    cost: 1, type: "DEF", value: 5,  desc: "BLK 5 / UPGRADE 1 RAND CARD", rare: "COMMON", isArmaments: true },
-  flask:        { name: "FLASK",        cost: 2, type: "ATK", value: 0,  desc: "APPLY 3 POISON 3 TIMES", rare: "RARE", isFlask: true, poisonTimes: 3, poisonVal: 3 },
-  dblNrg:       { name: "DBL-NRG",      cost: 1, type: "POW", value: 0,  desc: "DOUBLE CURRENT ENERGY", rare: "RARE", isDoubleEnergy: true },
-  payday:       { name: "PAYDAY",       cost: 0, type: "ATK", value: 3,  desc: "DMG 3 / GOLD +5", rare: "COMMON", payday: true },
-  bribery:      { name: "BRIBERY",      cost: 1, type: "DEF", value: 0,  desc: "WEAK 1 / PAY 15G -> ENEMY ATK -5", rare: "RARE", bribery: true },
-  goldSlam:     { name: "GOLD SLAM",    cost: 2, type: "ATK", value: 0,  desc: "DMG = 20% OF GOLD", rare: "RARE", goldSlam: true },
-  leftBlast:    { name: "LEFT BLAST",   cost: 1, type: "ATK", value: 6,  desc: "LEFTMOST: DMG 6 -> 16", rare: "COMMON", leftBlast: true },
-  rightShield:  { name: "R-SHIELD",     cost: 1, type: "DEF", value: 5,  desc: "RIGHTMOST: BLK 5 -> 12", rare: "COMMON", rightShield: true },
-  centerCharge: { name: "C-CHARGE",     cost: 0, type: "DRW", value: 2,  desc: "CENTER ONLY: DRAW 2", rare: "COMMON", centerOnly: true },
-
-  // -------------------- アップグレード版カード --------------------
-  "strike+": { name: "STRIKE+", cost: 1, type: "ATK", value: 10, desc: "ENEMY -10 HP", rare: "COMMON" },
-  "defend+": { name: "DEFEND+", cost: 1, type: "DEF", value: 8, desc: "BLOCK +8 / DRAW 1", draw: 1, rare: "COMMON" },
-  "bash+":   { name: "BASH+",   cost: 2, type: "ATK", value: 16, desc: "ENEMY -16 HP", rare: "COMMON", innate: true },
-  "quick+":  { name: "QUICK+",  cost: 0, type: "ATK", value: 4, desc: "DMG 4 / DRAW 1", rare: "COMMON", draw: 1 },
-  "focus+":  { name: "FOCUS+",  cost: 1, type: "DRW", value: 3, desc: "DRAW 3 CARDS", rare: "COMMON", draw: 3 },
-  "poisonD+":{ name: "P-DAGGER+",cost: 1, type: "ATK", value: 5, desc: "DMG 5 / POISON 5", rare: "RARE", poison: 5 },
-  "sbash+":  { name: "S-BASH+", cost: 2, type: "ATK", value: 0, desc: "DMG=BLOCK*100%(REQ>0)", rare: "RARE", isShieldBash: true, valueFactor: 1.0 },
-  "heal+":   { name: "MEDIC+",   cost: 1, type: "HEAL",value: 13, desc: "YOU +13 HP", rare: "RARE" },
-  "bodySlam+":{ name: "BODY SLAM+", cost: 0, type: "ATK", value: 0, desc: "DMG = CURRENT BLOCK", rare: "RARE", isBodySlam: true },
-  "heavyStrike+":{ name: "HEAVY STRIKE+", cost: 2, type: "ATK", value: 16, desc: "DMG 16 / +1 POW if STRGT", rare: "RARE", strengthSynergy: true },
-  "adrenaline+":{ name: "ADRENALINE+", cost: 0, type: "POW", value: 0, desc: "NRG +3 / NEXT TURN -1", rare: "RARE", adrenaline: true, adrenalineVal: 3 },
-  "wildSwing+":{ name: "WILD SWING+", cost: 1, type: "ATK", value: 16, desc: "DMG 16 / 15% SELF DMG 3", rare: "COMMON", risky: true, riskyProb: 0.15, riskyDmg: 3 },
-  "poisonBurst+":{ name: "POISON BURST+", cost: 2, type: "ATK", value: 0, desc: "ENEMY POISON x3", rare: "RARE", isPoisonBurst: true, factor: 3 },
-  "shieldSlam+": { name: "SHIELD SLAM+",  cost: 1, type: "ATK", value: 0, desc: "LOSE BLK / DMG=BLK*3", rare: "RARE", isShieldSlam: true, factor: 3 },
-  "trueGrit+":   { name: "TRUE GRIT+",    cost: 1, type: "DEF",  value: 7, desc: "BLK 7 / EXHAUST RAND / DRAW 1", rare: "COMMON", isTrueGrit: true, draw: 1 },
-  "feelNoPain+": { name: "FEEL NO PAIN+", cost: 1, type: "POW",  value: 4, desc: "WHEN EXHAUST, BLOCK +4", rare: "RARE", feelNoPain: true },
-  "ghostlyArmor+":{ name: "G-ARMOR+",   cost: 1, type: "DEF",  value: 14, desc: "BLOCK 14 / RETAIN", rare: "RARE", retain: true },
-  "zap+":          { name: "ZAP+",       cost: 0, type: "ATK", value: 10, desc: "DMG 10", rare: "COMMON" },
-  "charge+":       { name: "CHARGE+",    cost: 1, type: "POW", value: 2,  desc: "POW +2 / BLK +8", rare: "COMMON", chargeBlock: 8 },
-  "lightningOrb+": { name: "LIGHTNING+", cost: 1, type: "ATK", value: 12, desc: "DMG 12 / WEAK 2", rare: "RARE", applyWeak: 2 },
-  "chill+":        { name: "CHILL+",     cost: 1, type: "ATK", value: 6,  desc: "DMG 6 / VULN 3", rare: "RARE", vuln: 3 },
-
-  // -------------------- 新カード・アップグレード (拡張) --------------------
-  "inflame+":   { name: "INFLAME+",     cost: 1, type: "POW", value: 3,  desc: "STRENGTH +3", rare: "RARE", isInflame: true },
-  "armaments+": { name: "ARMAMENTS+",   cost: 1, type: "DEF", value: 8,  desc: "BLK 8 / UPGRADE 1 RAND CARD", rare: "COMMON", isArmaments: true },
-  "flask+":     { name: "FLASK+",       cost: 2, type: "ATK", value: 0,  desc: "APPLY 4 POISON 3 TIMES", rare: "RARE", isFlask: true, poisonTimes: 3, poisonVal: 4 },
-  "dodge+":     { name: "DODGE+",       cost: 1, type: "DEF", value: 6,  desc: "BLK 6 / NEXT TURN BLK 6", rare: "COMMON", isDodge: true, nextBlock: 6 },
-  "tStrike+":   { name: "T-STRIKE+",    cost: 3, type: "ATK", value: 0,  desc: "DMG = 7 x COMBAT ATKS PLAYED", rare: "RARE", isThunderStrike: true, factor: 7 },
-  "dblNrg+":    { name: "DBL-NRG+",     cost: 0, type: "POW", value: 0,  desc: "DOUBLE CURRENT ENERGY", rare: "RARE", isDoubleEnergy: true },
-  
-  heavyStrain:  { name: "STRAIN",       cost: 9, type: "CURS", value: 0,  desc: "UNPLAYABLE / T-END TAKE DMG = LOOP", rare: "COMMON" },
-  "strike-":    { name: "STRIKE-",      cost: 0, type: "ATK", value: 6,   desc: "ENEMY -6 HP / COST 0", rare: "COMMON" },
-  "defend-":    { name: "DEFEND-",      cost: 0, type: "DEF", value: 5,   desc: "BLOCK +5 / COST 0", rare: "COMMON" },
-  "bash-":      { name: "BASH-",        cost: 1, type: "ATK", value: 10,  desc: "ENEMY -10 HP / COST 1", rare: "COMMON", innate: true },
-  "zap-":       { name: "ZAP-",         cost: 0, type: "ATK", value: 5,   desc: "DMG 5 / COST 0", rare: "COMMON" },
-
-  // トークンカード
-  shiv:        { name: "SHIV",         cost: 0, type: "ATK", value: 4,  desc: "DMG 4 / EXHAUST TOKEN", rare: "COMMON", exhaust: true }
-};
-
-const ENEMY_TEMPLATES = {
-  1: { name: "GOBLIN", hp: 25, type: "goblin", exp: 15 },
-  2: { name: "SLIME", hp: 35, type: "slime", exp: 20 },
-  3: { name: "ELITE ORC", hp: 55, type: "orc", exp: 35 },
-  4: { name: "EVIL MAGE", hp: 58, type: "mage", exp: 40 },
-  5: { name: "DRAGON (BOSS)", hp: 120, type: "dragon", exp: 100 },
-  6: { name: "LICH (BOSS)", hp: 100, type: "lich", exp: 100 }
-};
-
-const RELIC_MASTER = {
-  redGem:      { name: "RED GEM",      desc: "PERMANENT ATK +2", cost: 40 },
-  blueGem:     { name: "BLUE GEM",     desc: "TURN START BLK +3", cost: 40 },
-  greenGem:    { name: "GREEN GEM",    desc: "MAX ENERGY +1", cost: 65 },
-  funnel:      { name: "FUNNEL",       desc: "COMBAT START POIS 3", cost: 50 },
-  ninjaScroll: { name: "NINJA SCROLL", desc: "3 ATK played -> DMG 4", cost: 55 },
-  letterOpener:{ name: "LETTER OPENER",desc: "3 DEF played -> DMG 6", cost: 55 },
-  echoRing:    { name: "ECHO RING",    desc: "1st ATK played TWICE", cost: 60 },
-  burningBlood:{ name: "BURNING BLOOD",desc: "WIN COMBAT -> HP +6", cost: 50 },
-  sneckoSkull: { name: "SNECKO SKULL", desc: "POISON APPLY +1", cost: 45 },
-  mummifiedHand:{ name:"MUMMY HAND",  desc: "POW PLAY -> RAND -1 COST", cost: 60 },
-  goldBag:     { name: "GOLD BAG",     desc: "COMBAT START GOLD +5G", cost: 45 },
-  loopCrown:   { name: "LOOP CROWN",   desc: "PERMANENT ATK +3", cost: 50 },
-  voidStone:   { name: "VOID STONE",   desc: "TURN START NRG +1 / MAX HP -5", cost: 50 }
-};
-
+let pMaterial = 0;
+let totalMaterialGained = 0; 
+let baseBuildings = { armory: 0, infirmary: 0, arcaneTower: 0, tradingPost: 0, trainingGround: 0, alchemyLab: 0, defenseWall: 0 };
+let activeForgeProject = null;
+let totalSynthesisCount = 0; 
 let currentFloor = 1;
 let gameState = "BATTLE"; 
 let fc = 0, flashFrame = 0;
-
 let enemyShakeFrame = 0; 
 let enemyDeathFrame = 0; 
-
-// プレイヤー
 let pHP = 50, pMaxHP = 50, pEnergy = 3, pMaxEnergy = 3, pBlock = 0, pPower = 0, pGold = 45, pExp = 0, pLv = 1;
 let pPoison = 0, pWeak = 0, pVuln = 0;
-let pRelics = { redGem: false, blueGem: false, greenGem: false, funnel: false, ninjaScroll: false, letterOpener: false, echoRing: false, burningBlood: false, sneckoSkull: false, mummifiedHand: false, goldBag: false, loopCrown: false, voidStone: false };
-
-// ポジショニング＆簡易マップ用変数
-let playedCardIdx = -1;
+let pRelics = { redGem: false, blueGem: false, greenGem: false, funnel: false, ninjaScroll: false, letterOpener: false, echoRing: false, burningBlood: false, sneckoSkull: false, mummifiedHand: false, goldBag: false, loopCrown: false, voidStone: false, battleStandard: false, arcaneBattery: false, goldenScale: false, venomVial: false };
 let playedHandLength = 0;
 let mapOptions = [];
-let upgradeTargetIdx = -1; // SMITH強化確認画面用
-let upgradeSource = ""; // "CAMPFIRE" | "LEVELUP"
-
-// コンボエンジン用バフ
+let upgradeTargetIdx = -1; 
+let upgradeSource = ""; 
+let deckViewSource = "DECK"; 
 let turnAtkCount = 0;
 let turnDefCount = 0;
 let isFirstAtkInTurn = true;
@@ -236,8 +169,6 @@ let handCostMods = [];
 let nextTurnBlock = 0;
 let combatAtkCount = 0;
 let pFrail = 0;
-let activeMeldingTriggered = false;
-let activeOrcChallenge = false;
 let pClass = "";
 let currentLoop = 1;
 let maxLoopReached = 1;
@@ -245,39 +176,35 @@ let activeSlimeSplitted = false;
 let slimeChildHP1 = 0;
 let slimeChildHP2 = 0;
 let eventType = "";
-
+let totalDamageDealt = 0;
+let totalTurns = 0;
+let maxComboDmg = 0;
+let turnDamageDealt = 0;
+let lastEnemyAttackName = "";
 const POTION_MASTER = {
   "healP": { name: "HP POTION", desc: "HPを 15 回復します。" },
   "poisP": { name: "POISON POTION", desc: "敵に 毒 を 5 付与します。" },
   "shieldP": { name: "SHIELD POTION", desc: "シールドを 8 得ます。" }
 };
-
-// 敵
 let eName = "", eHP = 30, eMaxHP = 30, eBlock = 0, eType = "", eTurnCount = 0, eExpReward = 0;
 let eIntent = { action: "ATTACK", type: "⚔️", name: "STRIKE", value: 6 };
 let ePoison = 0, eWeak = 0, eVuln = 0, eThorns = 0;
 let ePhase2Triggered = false;
-let ePhase2Gimmick = ""; // "flame_aura" | "curse_energy" | "ancient_power"
-
-// デッキ
+let ePhase2Gimmick = ""; 
 let masterDeck = ["strike", "strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "bash", "quick"];
 let deck = [], hand = [], discard = [];
 let selectedIdx = -1;
-
 let rewardOptions = [];
 let shopInventory = []; 
 let activeShopItemIdx = -1; 
-
 let dmgPopups = []; 
 let mx = 0, my = 0;
-
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(gameRandom() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
 }
-
 function decideEnemyIntent() {
   eTurnCount++;
   if (eType === "goblin") {
@@ -312,7 +239,6 @@ function decideEnemyIntent() {
     else eIntent = { action: "DEFEND", type: "🛡️", name: "SOUL BARRIER", value: 15 };
   }
   
-  // スライムの加勢攻撃スケーリング (+4 x 生存数)
   if (eType === "slime" && eIntent.action === "ATTACK") {
     let childBonus = (slimeChildHP1 > 0 ? 4 : 0) + (slimeChildHP2 > 0 ? 4 : 0);
     if (childBonus > 0) {
@@ -321,94 +247,17 @@ function decideEnemyIntent() {
     }
   }
 
-  // 攻撃力スケーリング: LOOP 1 = 1.0, LOOP 2 = 1.3, LOOP 3 = 1.6 ...
   if (eIntent.action === "ATTACK" && eIntent.value > 0) {
     let dmgMultiplier = 1 + (currentLoop - 1) * 0.3;
     eIntent.value = Math.floor(eIntent.value * dmgMultiplier);
   }
   
-  // DRAGON ANCIENT POWER: フェーズ2で毎ターンATK+3
   if (eType === "dragon" && ePhase2Triggered && ePhase2Gimmick === "ancient_power" && eIntent.action === "ATTACK") {
     let powerStacks = Math.max(0, eTurnCount - 3) * 3;
     eIntent.value += powerStacks;
     if (powerStacks > 0) dmgPopups.push({ text: `ANCIENT POWER +${powerStacks}`, x: 380, y: 95, col: PURPLE, frames: 35 });
   }
 }
-
-function startPlayerTurn() {
-  if (pPoison > 0) {
-    pHP = Math.max(1, pHP - pPoison);
-    dmgPopups.push({ text: `POISON -${pPoison}`, x: 100, y: 140, col: GREEN, frames: 35 });
-    pPoison--;
-  }
-
-  let maxEnergyBonus = pMaxEnergy + (pRelics.greenGem ? 1 : 0) + (pRelics.voidStone ? 1 : 0) + nextTurnEnergyMod;
-  pEnergy = Math.max(0, maxEnergyBonus);
-  nextTurnEnergyMod = 0; 
-
-  // ドラゴンフェーズ2ギミック効果
-  if (ePhase2Triggered && eType === "dragon") {
-    if (ePhase2Gimmick === "flame_aura") {
-      pBlock = Math.floor(pBlock / 2);
-      if (pBlock > 0) dmgPopups.push({ text: "🔥FLAME AURA: BLK HALVED", x: 100, y: 100, col: RED, frames: 30 });
-    }
-  }
-
-  // リッチフェーズ2パッシブ効果
-  if (ePhase2Triggered && eType === "lich") {
-    pFrail++;
-    dmgPopups.push({ text: "💀 LICH DECAY: FRAIL +1", x: 100, y: 150, col: PURPLE, frames: 35 });
-  }
-
-  pBlock = (pRelics.blueGem ? 3 : 0) + nextTurnBlock;
-  if(pRelics.blueGem) {
-    dmgPopups.push({ text: "GEM SHIELD +3", x: 100, y: 120, col: CYAN, frames: 30 });
-  }
-  if (nextTurnBlock > 0) {
-    dmgPopups.push({ text: `DODGE BLOCK +${nextTurnBlock}`, x: 100, y: 135, col: CYAN, frames: 30 });
-    nextTurnBlock = 0;
-  }
-
-  turnAtkCount = 0;
-  turnDefCount = 0;
-  isFirstAtkInTurn = true;
-  pReflect = 0; 
-  activeOrcChallenge = false; 
-
-  gameState = "BATTLE";
-  decideEnemyIntent();
-  
-  hand = [];
-  handCostMods = [];
-  if (isFirstTurnOfCombat) {
-    isFirstTurnOfCombat = false;
-    for (let i = deck.length - 1; i >= 0; i--) {
-      let cKey = deck[i];
-      if (CARD_MASTER[cKey] && CARD_MASTER[cKey].innate) {
-        hand.push(cKey);
-        handCostMods.push(0);
-        deck.splice(i, 1);
-        if (hand.length >= 10) break;
-      }
-    }
-    if (hand.length < 5) {
-      drawCards(5 - hand.length);
-    }
-  } else {
-    drawCards(5);
-  }
-
-  if(activeInfiniteBladesCount > 0) {
-    for(let k=0; k<activeInfiniteBladesCount; k++) {
-      if(hand.length < 10) {
-        hand.push("shiv");
-        handCostMods.push(0);
-        dmgPopups.push({ text: "SHIV GENERATED", x: 256, y: 300, col: WHITE, frames: 25 });
-      }
-    }
-  }
-}
-
 function drawCards(num) {
   for (let i = 0; i < num; i++) {
     if (hand.length >= 10) break;
@@ -423,7 +272,6 @@ function drawCards(num) {
   }
   sfxDraw();
 }
-
 function triggerDiscardBlockLogic(amount) {
   if (activeIronSkinCount > 0 && amount > 0) {
     let ironBlock = activeIronSkinCount * 3;
@@ -431,7 +279,6 @@ function triggerDiscardBlockLogic(amount) {
     dmgPopups.push({ text: `IRON SKIN +${ironBlock}`, x: 100, y: 110, col: CYAN, frames: 35 });
   }
 }
-
 function triggerExhaustLogic() {
   if(activeDarkEmbraceCount > 0) {
     drawCards(activeDarkEmbraceCount);
@@ -442,8 +289,11 @@ function triggerExhaustLogic() {
     dmgPopups.push({ text: `FEEL NO PAIN +${activeFeelNoPainCount}`, x: 100, y: 110, col: CYAN, frames: 35 });
   }
 }
-
 function runEnemyTurn() {
+  totalTurns++;
+  if (turnDamageDealt > maxComboDmg) maxComboDmg = turnDamageDealt;
+  turnDamageDealt = 0;
+
   gameState = "ENEMY_TURN";
   sfxTurnEnd();
   
@@ -451,34 +301,32 @@ function runEnemyTurn() {
   if (pVuln > 0) pVuln--;
   if (pFrail > 0) pFrail--;
 
-  // 呪いカード処理
+  function applyCurseDmg(dmg, label, popupY) {
+    if (pBlock >= dmg) {
+      pBlock -= dmg;
+      dmgPopups.push({ text: `${label} BLOCKED`, x: 100, y: popupY, col: "#00c8d0", frames: 40 });
+    } else {
+      let through = dmg - pBlock; pBlock = 0; pHP = Math.max(0, pHP - through);
+      dmgPopups.push({ text: `${label} -${through} HP`, x: 100, y: popupY, col: RED, frames: 40 });
+    }
+    return pHP <= 0;
+  }
+
   let regretCount = hand.filter(k => k === "regret").length;
   if (regretCount > 0) {
-    let regretDmg = regretCount * 2;
-    pHP = Math.max(0, pHP - regretDmg);
-    dmgPopups.push({ text: `REGRET -${regretDmg} HP`, x: 100, y: 150, col: RED, frames: 40 });
-    if (pHP <= 0) { gameState = "GAMEOVER"; return; }
+    if (applyCurseDmg(regretCount * 2, "REGRET", 150)) { lastEnemyAttackName = "REGRET CURSE"; gameState = "GAMEOVER"; return; }
   }
   let decayCount = hand.filter(k => k === "decay").length;
   if (decayCount > 0) {
-    let decayDmg = decayCount * 3;
-    pHP = Math.max(0, pHP - decayDmg);
-    dmgPopups.push({ text: `DECAY -${decayDmg} HP`, x: 100, y: 135, col: RED, frames: 40 });
-    if (pHP <= 0) { gameState = "GAMEOVER"; return; }
+    if (applyCurseDmg(decayCount * 3, "DECAY", 135)) { lastEnemyAttackName = "DECAY CURSE"; gameState = "GAMEOVER"; return; }
   }
   let burnCount = hand.filter(k => k === "burn").length;
   if (burnCount > 0) {
-    let burnDmg = burnCount * 1;
-    pHP = Math.max(0, pHP - burnDmg);
-    dmgPopups.push({ text: `BURN -${burnDmg} HP`, x: 100, y: 120, col: RED, frames: 40 });
-    if (pHP <= 0) { gameState = "GAMEOVER"; return; }
+    if (applyCurseDmg(burnCount * 1, "BURN", 120)) { lastEnemyAttackName = "BURN BURNING"; gameState = "GAMEOVER"; return; }
   }
   let strainCount = hand.filter(k => k === "heavyStrain").length;
   if (strainCount > 0) {
-    let strainDmg = strainCount * currentLoop;
-    pHP = Math.max(0, pHP - strainDmg);
-    dmgPopups.push({ text: `STRAIN -${strainDmg} HP`, x: 100, y: 110, col: RED, frames: 40 });
-    if (pHP <= 0) { gameState = "GAMEOVER"; return; }
+    if (applyCurseDmg(strainCount * currentLoop, "STRAIN", 110)) { lastEnemyAttackName = "STRAIN LOOP DAMAGE"; gameState = "GAMEOVER"; return; }
   }
 
   let retained = [];
@@ -516,6 +364,7 @@ function runEnemyTurn() {
     if (eWeak > 0) baseEValue = Math.floor(baseEValue * 0.5);
 
     if (eIntent.action === "ATTACK") {
+      lastEnemyAttackName = eName + " (" + eIntent.name + ")";
       let dmg = baseEValue;
       if (pVuln > 0) dmg = Math.floor(dmg * 1.5);
 
@@ -545,32 +394,23 @@ function runEnemyTurn() {
         pFrail += eIntent.frail;
         dmgPopups.push({ text: `FRAIL +${eIntent.frail}`, x: 100, y: 195, col: YELLOW, frames: 35 });
       }
-      // MAGEのARCANE CURSEでBURNカードを山札に挿入
       if (eType === "mage" && eIntent.name === "ARCANE CURSE") {
         deck.push("burn");
         shuffle(deck);
         dmgPopups.push({ text: "🔥BURN ADDED TO DECK", x: 256, y: 220, col: RED, frames: 50 });
       }
-      // MAGEのSPOILで手札にWOUNDカードを挿入
       if (eType === "mage" && eIntent.name === "SPOIL") {
         if (hand.length < 10) { hand.push("wound"); handCostMods.push(0); }
         if (hand.length < 10) { hand.push("wound"); handCostMods.push(0); }
         dmgPopups.push({ text: "⚠️ SPOILED: WOUND x2 ADDED", x: 256, y: 220, col: GRAY, frames: 50 });
       }
-      // ORCのCHALLENGE効果発動
-      if (eType === "orc" && eIntent.name === "CHALLENGE") {
-        activeOrcChallenge = true;
-        dmgPopups.push({ text: "🛡️ CHALLENGED: ATK GIVES BLOCK", x: 256, y: 220, col: RED, frames: 55 });
-      }
-      // LICHのDARK CURSE効果
       if (eType === "lich" && eIntent.name === "DARK CURSE") {
         let curses = ["regret", "decay"];
-        let selectedC = curses[Math.floor(Math.random() * curses.length)];
+        let selectedC = curses[Math.floor(gameRandom() * curses.length)];
         deck.push(selectedC);
         shuffle(deck);
         dmgPopups.push({ text: `💀 CURSE: ${CARD_MASTER[selectedC].name} ADDED`, x: 256, y: 220, col: PURPLE, frames: 55 });
       }
-      // LICHフェーズ移行チェック
       if (eType === "lich" && eHP <= (eMaxHP / 2) && !ePhase2Triggered) {
         ePhase2Triggered = true;
         flashFrame = 20;
@@ -578,11 +418,10 @@ function runEnemyTurn() {
         dmgPopups.push({ text: "PHASE 2: EVERY TURN FRAIL +1", x: 256, y: 195, col: RED, frames: 60 });
         beep(90, 0.4, 'sawtooth', 0.25); beep(70, 0.35, 'sawtooth', 0.2, 0.12);
       }
-      // DRAGONフェーズ移行チェック
       if (eType === "dragon" && eHP <= (eMaxHP / 2) && !ePhase2Triggered) {
         ePhase2Triggered = true;
         let gimmicks = ["flame_aura", "curse_energy", "ancient_power"];
-        ePhase2Gimmick = gimmicks[Math.floor(Math.random() * gimmicks.length)];
+        ePhase2Gimmick = gimmicks[Math.floor(gameRandom() * gimmicks.length)];
         flashFrame = 20;
         dmgPopups.push({ text: "🐲 THE DRAGON ROARS! 🐲", x: 256, y: 170, col: YELLOW, frames: 70 });
         dmgPopups.push({ text: "PHASE 2 ACTIVATED", x: 256, y: 190, col: RED, frames: 60 });
@@ -604,14 +443,9 @@ function runEnemyTurn() {
         activeSlimeSplitted = true;
         slimeChildHP1 = 10;
         slimeChildHP2 = 10;
-        ePoison = 0; // 親の毒などのデバフをクリア
+        ePoison = 0; 
         eWeak = eVuln = 0;
         dmgPopups.push({ text: "SPLIT: 2 MINI-SLIMES SPAWNED", x: 256, y: 170, col: CYAN, frames: 60 });
-      } else if (eIntent.name === "MELDING") {
-        eHP = Math.min(eMaxHP, eHP + 15);
-        ePoison = 0;
-        eWeak = eVuln = 0;
-        dmgPopups.push({ text: "MELDING: +15 HP & CURED", x: 380, y: 160, col: GREEN, frames: 45 });
       } else if (eIntent.name === "SOUL BARRIER") {
         eBlock += baseEValue;
         eThorns += 2;
@@ -628,76 +462,10 @@ function runEnemyTurn() {
     }, 500);
   }, 600);
 }
-
-function triggerEnemyDeathAnim() {
-  gameState = "DEATH_ANIM";
-  enemyDeathFrame = 24; 
-  sfxDeath();
-}
-
-function handleEnemyDeathFinal() {
-  pExp += eExpReward;
-  pGold += 18 + Math.floor(Math.random() * 15);
-  
-  // BURNING BLOODレリック効果
-  if (pRelics.burningBlood) {
-    pHP = Math.min(pMaxHP, pHP + 6);
-    dmgPopups.push({ text: "BURNING BLOOD +6 HP", x: 100, y: 160, col: GREEN, frames: 40 });
-  }
-  
-  if (currentFloor === 3) {
-    let unowned = Object.keys(RELIC_MASTER).filter(k => !pRelics[k]);
-    if (unowned.length > 0) {
-      let rRelic = unowned[Math.floor(Math.random() * unowned.length)];
-      pRelics[rRelic] = true;
-      dmgPopups.push({ text: `ELITE REWARD: ${RELIC_MASTER[rRelic].name}`, x: 256, y: 150, col: YELLOW, frames: 50 });
-    }
-  }
-
-  let nextLvExp = pLv * 25;
-  if (pExp >= nextLvExp) {
-    pExp -= nextLvExp; pLv++; sfxLvUp(); gameState = "LEVELUP";
-  } else {
-    generateRewardOptions();
-  }
-}
-
-function generateRewardOptions() {
-  gameState = "REWARD";
-  sfxWin();
-  rewardOptions = [];
-  const allKeys = Object.keys(CARD_MASTER).filter(k => k !== "shiv" && k !== "regret" && k !== "decay" && k !== "wound" && k !== "burn"); 
-  
-  while(rewardOptions.length < 3) {
-    let rK = allKeys[Math.floor(Math.random() * allKeys.length)];
-    if (!rewardOptions.includes(rK)) rewardOptions.push(rK);
-  }
-  shuffle(rewardOptions);
-}
-
-function generateShopInventory() {
-  gameState = "SHOP";
-  shopInventory = [];
-  const keys = Object.keys(CARD_MASTER).filter(k => k !== "shiv" && k !== "regret" && k !== "decay" && k !== "wound" && k !== "burn");
-  
-  for(let i=0; i<2; i++) {
-    let rKey = keys[Math.floor(Math.random() * keys.length)];
-    let rarityPrice = CARD_MASTER[rKey].rare === "RARE" ? 35 : 20;
-    shopInventory.push({ type: "CARD", cardKey: rKey, cost: rarityPrice, bought: false });
-  }
-  
-  const relicKeys = Object.keys(RELIC_MASTER).filter(k => !pRelics[k]);
-  if (relicKeys.length > 0) {
-    shuffle(relicKeys);
-    let rRelic = relicKeys[0];
-    shopInventory.push({ type: "RELIC", relicKey: rRelic, cost: RELIC_MASTER[rRelic].cost, bought: false });
-  }
-
-  shopInventory.push({ type: "POTION", cost: 15, bought: false });
-  shopInventory.push({ type: "REMOVE", cost: 25, bought: false });
-}
-
 function initGame() {
+  if (!gameSeed) setSeed(generateRandomSeed());
+  else setSeed(gameSeed);
+  
   currentFloor = 1; pPower = 0; pGold = 45; pExp = 0; pLv = 1; pMaxEnergy = 3;
   pPoison = pWeak = pVuln = 0;
   activeRupturesCount = 0;
@@ -710,66 +478,31 @@ function initGame() {
   nextTurnEnergyMod = 0;
   activeCombustCount = 0;
   nextCardCostMod = 0;
-  pRelics = { redGem: false, blueGem: false, greenGem: false, funnel: false, ninjaScroll: false, letterOpener: false, echoRing: false, burningBlood: false, sneckoSkull: false, mummifiedHand: false };
+  pRelics = { redGem: false, blueGem: false, greenGem: false, funnel: false, ninjaScroll: false, letterOpener: false, echoRing: false, burningBlood: false, sneckoSkull: false, mummifiedHand: false, goldBag: false, loopCrown: false, voidStone: false, battleStandard: false, arcaneBattery: false, goldenScale: false, venomVial: false };
   pPotions = [];
   handCostMods = [];
   nextTurnBlock = 0;
   pFrail = 0;
-  activeMeldingTriggered = false;
-  activeOrcChallenge = false;
   currentLoop = 1;
+  maxLoopReached = 1;
   activeSlimeSplitted = false;
   slimeChildHP1 = 0;
   slimeChildHP2 = 0;
+  
+  totalDamageDealt = 0;
+  totalTurns = 0;
+  maxComboDmg = 0;
+  turnDamageDealt = 0;
+  lastEnemyAttackName = "UNKNOWN ATTACK";
+  
+  pMaterial = 0;
+  totalMaterialGained = 0;
+  baseBuildings = { armory: 0, infirmary: 0, arcaneTower: 0, tradingPost: 0, trainingGround: 0, alchemyLab: 0, defenseWall: 0 };
+  activeForgeProject = null;
+  totalSynthesisCount = 0;
+  
   gameState = "CLASS_SELECT";
 }
-
-function initFloor() {
-  gameState = "BATTLE";
-  let t = ENEMY_TEMPLATES[currentFloor] || ENEMY_TEMPLATES[1];
-  if (currentFloor === 5) {
-    t = Math.random() < 0.5 ? ENEMY_TEMPLATES[5] : ENEMY_TEMPLATES[6];
-  }
-  eName = t.name; 
-  
-  // HPスケーリング: LOOP 1 = 1.0, LOOP 2 = 1.5, LOOP 3 = 2.0 ...
-  let hpMultiplier = 1 + (currentLoop - 1) * 0.5;
-  let finalHP = Math.floor(t.hp * hpMultiplier);
-  eHP = finalHP; eMaxHP = finalHP;
-  
-  eBlock = 0; eType = t.type; eExpReward = t.exp; eTurnCount = 0;
-  ePoison = pRelics.funnel ? 3 : 0; 
-  eWeak = eVuln = 0;
-  
-  // LOOP 2以上で敵が最初からトゲ（Thorns）を持つ
-  let loopThorns = currentLoop >= 2 ? (currentLoop - 1) : 0;
-  eThorns = ((t.type === "orc") ? 3 : 0) + loopThorns; 
-  
-  // LOOP 4以上で敵が最初からシールドを持つ
-  if (currentLoop >= 4) eBlock = (currentLoop - 3) * 5;
-
-  ePhase2Triggered = false;
-  isFirstTurnOfCombat = true;
-  combatAtkCount = 0;
-  nextTurnBlock = 0;
-  pFrail = 0;
-  activeMeldingTriggered = false;
-  activeOrcChallenge = false;
-  activeSlimeSplitted = false;
-  slimeChildHP1 = 0;
-  slimeChildHP2 = 0;
-  
-  deck = [...masterDeck];
-  hand = []; discard = [];
-  handCostMods = [];
-  shuffle(deck);
-  if (pRelics.goldBag) {
-    pGold += 5;
-    dmgPopups.push({ text: "GOLD BAG +5G", x: 100, y: 150, col: YELLOW, frames: 40 });
-  }
-  startPlayerTurn();
-}
-
 function generateMapOptions() {
   mapOptions = [];
   let nextF = currentFloor + 1;
@@ -791,60 +524,72 @@ function generateMapOptions() {
     mapOptions.push(pool[1]);
   }
 }
-
 function proceedToNextFloor() {
   if (currentFloor >= 5) {
     gameState = "ENDING";
     sfxWin();
   } else {
-    generateMapOptions();
-    gameState = "MAP_SELECT";
+    gameState = "BASE_VIEW";
   }
 }
-
-
-function calculatePredictedDamage(cData, idx = -1, handLen = 0) {
-  let baseDmg = cData.value;
-  let playerFinalPowerBonus = pPower + (pRelics.redGem ? 2 : 0) + (pRelics.loopCrown ? 3 : 0);
-  
-  baseDmg += activeAccuracyBonus;
-  
-  if (cData.isShieldBash) baseDmg = Math.floor(pBlock * (cData.valueFactor || 0.7));
-  else if (cData.isExecute && eHP <= (eMaxHP / 2)) baseDmg = 20;
-  else if (cData.isFortress) baseDmg = cData.value + Math.floor(pBlock * 0.5) + activeAccuracyBonus;
-  else if (cData.isToxicDmg) baseDmg = cData.value + (ePoison * 3) + activeAccuracyBonus;
-  else if (cData.isBarrierBlast) baseDmg = cData.value + pBlock + activeAccuracyBonus;
-  else if (cData.isBodySlam) baseDmg = pBlock;
-  else if (cData.isShieldSlam) baseDmg = pBlock * (cData.factor || 2);
-  else if (cData.strengthSynergy) baseDmg = cData.value + playerFinalPowerBonus + activeAccuracyBonus;
-  else if (cData.risky || cData.isOffering) baseDmg = 12 + activeAccuracyBonus;
-  else if (cData.goldSlam) baseDmg = Math.floor(pGold * 0.2);
-  else if (cData.leftBlast) {
-    let actIdx = (idx !== -1) ? idx : playedCardIdx;
-    baseDmg = (actIdx === 0) ? 16 : 6;
+// ==================== セーブ・ロード機能拡張 ====================
+function exportSaveCode() {
+  try {
+    const saveData = {
+      pClass, pHP, pMaxHP, pEnergy, pMaxEnergy, pGold, pExp, pLv, pMaterial, totalMaterialGained,
+      baseBuildings, masterDeck, pRelics, currentFloor, currentLoop, maxLoopReached,
+      totalSynthesisCount, totalDamageDealt, totalTurns, maxComboDmg, gameSeed
+    };
+    const jsonStr = JSON.stringify(saveData);
+    const code = btoa(encodeURIComponent(jsonStr));
+    document.getElementById("saveCode").value = code;
+    alert("現在の状況を暗号化しました！セーブコードをコピーして保管してください。");
+  } catch(e) {
+    alert("セーブデータの生成に失敗しました。");
   }
-
-  let finalVal = baseDmg;
-  if (pWeak > 0) finalVal = Math.floor(finalVal * 0.5);
-  finalVal += playerFinalPowerBonus;
-  if (eVuln > 0) finalVal = Math.floor(finalVal * 1.5);
-  
-  return finalVal;
 }
+function importSaveCode() {
+  const code = document.getElementById("saveCode").value.trim();
+  if(!code) {
+    alert("セーブコードが空です。テキストボックスに貼り付けてください。");
+    return;
+  }
+  try {
+    const jsonStr = decodeURIComponent(atob(code));
+    const d = JSON.parse(jsonStr);
+    
+    pClass = d.pClass || "WARRIOR";
+    pHP = d.pHP || 50; pMaxHP = d.pMaxHP || 50;
+    pEnergy = d.pEnergy || 3; pMaxEnergy = d.pMaxEnergy || 3;
+    pGold = d.pGold || 0; pExp = d.pExp || 0; pLv = d.pLv || 1;
+    pMaterial = d.pMaterial || 0; totalMaterialGained = d.totalMaterialGained || 0;
+    baseBuildings = d.baseBuildings || { armory: 0, infirmary: 0, arcaneTower: 0, tradingPost: 0, trainingGround: 0, alchemyLab: 0, defenseWall: 0 };
+    masterDeck = d.masterDeck || [];
+    pRelics = d.pRelics || {};
+    currentFloor = d.currentFloor || 1;
+    currentLoop = d.currentLoop || 1;
+    maxLoopReached = d.maxLoopReached || 1;
+    totalSynthesisCount = d.totalSynthesisCount || 0;
+    totalDamageDealt = d.totalDamageDealt || 0;
+    totalTurns = d.totalTurns || 0;
+    maxComboDmg = d.maxComboDmg || 0;
+    if(d.gameSeed) setSeed(d.gameSeed);
 
+    pBlock = 0; pPower = 0; pPoison = 0; pWeak = 0; pVuln = 0; pFrail = 0;
+    activeRupturesCount = 0; activeIronSkinCount = 0; activeAccuracyBonus = 0;
+    activeInfiniteBladesCount = 0; activeDarkEmbraceCount = 0; activeFeelNoPainCount = 0;
+    activeForgeProject = null; pPotions = []; handCostMods = [];
+    
+    gameState = "BASE_VIEW";
+    sfxWin();
+    alert("ロード完了！安全なシェルターから再開します。");
+  } catch(e) {
+    alert("無効なセーブコードです。正しくコピーされているか確認してください。");
+  }
+}
 // ==================== 描画パレット ====================
 const BG = '#0a0a14', WHITE = '#e8e8e0', GRAY = '#505060', YELLOW = '#f0d000';
 const RED = '#d82800', BLUE = '#0088ff', CYAN = '#00c8d0', GREEN = '#1a8a1a', PURPLE = '#b040ff';
-
-function px(t, x, y, col, sz, center) {
-  cx.fillStyle = col; 
-  let finalSz = Math.round(sz * 1.15);
-  cx.font = `bold ${finalSz}px monospace`;
-  cx.letterSpacing = sz < 10 ? "0.2px" : "1.5px";
-  if (center) { const w = cx.measureText(t).width; cx.fillText(t, x - w / 2, y); }
-  else { cx.fillText(t, x, y); }
-}
-
 function drawCardIcon(type, x, y) {
   cx.save();
   if (type === "ATK") {
@@ -861,14 +606,10 @@ function drawCardIcon(type, x, y) {
   }
   cx.restore();
 }
-
 function drawEnemySprite(type, x, y) {
   cx.save();
   if (gameState === "DEATH_ANIM") {
-    if (Math.floor(enemyDeathFrame / 3) % 2 === 0) {
-      cx.restore();
-      return; 
-    }
+    if (Math.floor(enemyDeathFrame / 3) % 2 === 0) { cx.restore(); return; }
   } else if (enemyShakeFrame > 0) {
     let shakeOffset = (Math.random() - 0.5) * 8;
     cx.translate(shakeOffset, 0);
@@ -881,14 +622,11 @@ function drawEnemySprite(type, x, y) {
   } else if (type === "slime") {
     cx.fillStyle = '#08d'; cx.beginPath(); cx.ellipse(x, y-5, 22, 16, 0, 0, Math.PI*2); cx.fill();
     cx.fillStyle = WHITE; cx.fillRect(x-8, y-8, 4, 4); cx.fillRect(x+4, y-8, 4, 4);
-    
-    // 子スライム1 (左下)
     if (slimeChildHP1 > 0) {
       cx.fillStyle = '#5af'; cx.beginPath(); cx.ellipse(x-30, y+10, 10, 8, 0, 0, Math.PI*2); cx.fill();
       cx.fillStyle = WHITE; cx.fillRect(x-33, y+8, 2, 2); cx.fillRect(x-29, y+8, 2, 2);
       px(`${slimeChildHP1}`, x-30, y+25, GREEN, 7, true);
     }
-    // 子スライム2 (右下)
     if (slimeChildHP2 > 0) {
       cx.fillStyle = '#5af'; cx.beginPath(); cx.ellipse(x+30, y+10, 10, 8, 0, 0, Math.PI*2); cx.fill();
       cx.fillStyle = WHITE; cx.fillRect(x+27, y+8, 2, 2); cx.fillRect(x+31, y+8, 2, 2);
@@ -915,31 +653,7 @@ function drawEnemySprite(type, x, y) {
   }
   cx.restore();
 }
-
-const STATUS_DESCS = {
-  "POIS": { name: "POISON (毒)", desc: "ターン開始時にダメージを受け、値が1減少します。" },
-  "WEAK": { name: "WEAK (脱力)", desc: "与えるアタックのダメージが50%減少します。" },
-  "VULN": { name: "VULNERABLE (脆弱)", desc: "受けるアタックのダメージが50%増加します。" },
-  "REFL": { name: "REFLECT (反射)", desc: "攻撃を受けた際、攻撃者にこの値のダメージを与えます。" },
-  "POWER": { name: "STRENGTH (筋力)", desc: "アタックのダメージがこの値だけ増加します。" },
-  "THORNS": { name: "THORNS (トゲ)", desc: "攻撃を受けるたびに、攻撃者にこの値のダメージを与えます。" },
-  "redGem": { name: "RED GEM (赤の宝石)", desc: "恒久的にアタックのダメージが +2 されます。" },
-  "blueGem": { name: "BLUE GEM (青の宝石)", desc: "ターン開始時、シールド(ブロック)を 3 得ます。" },
-  "greenGem": { name: "GREEN GEM (緑の宝石)", desc: "最大エネルギー(MP)が +1 されます。" },
-  "funnel": { name: "FUNNEL (漏斗)", desc: "戦闘開始時、敵に毒を 3 付与します。" },
-  "ninjaScroll": { name: "NINJA SCROLL (忍者の巻物)", desc: "アタックを3回プレイするたびに、敵に4ダメージ与えます。" },
-  "letterOpener": { name: "LETTER OPENER (ペーパーナイフ)", desc: "防御(DEF)を3回プレイするたびに、敵に6ダメージ与えます。" },
-  "echoRing": { name: "ECHO RING (反響の指輪)", desc: "各ターンに最初に使用するアタックが2回発動します。" },
-  "sneckoSkull": { name: "SNECKO SKULL (スネッコの頭骨)", desc: "敵に毒を付与する時、付与する毒の値が +1 されます。" },
-  "mummifiedHand": { name: "MUMMIFIED HAND (ミイラの手)", desc: "パワーカードを使用するたび、手札のランダムなカード1枚のコストを 0 にします。" },
-  "FRAIL": { name: "FRAIL (衰弱)", desc: "防御カードで得られるシールドの値が 50% 減少します。" },
-  "goldBag": { name: "GOLD BAG (商人の金袋)", desc: "戦闘開始時、ゴールドを +5G 得ます。" },
-  "loopCrown":  { name: "LOOP CROWN (ループの王冠)", desc: "恒久的にアタックのダメージが +3 されます。" },
-  "voidStone":  { name: "VOID STONE (虚無の石)", desc: "ターン開始時のエネルギーが +1 されますが、最大HPが 5 減少します。" }
-};
-
 let activeTooltip = null;
-
 function drawStatusIcons(x, y, poison, weak, vuln, thorns, frail, alignCenter) {
   let spacing = 38;
   let list = [];
@@ -958,41 +672,1144 @@ function drawStatusIcons(x, y, poison, weak, vuln, thorns, frail, alignCenter) {
   list.forEach(item => {
     px(`${item.icon}${item.label}`, currentX, y, GREEN, 11, true);
     px(item.sub, currentX, y + 11, '#ffa0a0', 7, true);
-    
-    // マウスホバー判定 (アイコン領域内にあるかチェック)
     if (mx >= currentX - 15 && mx <= currentX + 15 && my >= y && my <= y + 20) {
       activeTooltip = STATUS_DESCS[item.key];
     }
-    
     currentX += spacing;
   });
 }
-
-// 手札の「描画座標の計算」を一元管理してズレを完全解消
 function getCardGeometry(handLength, index) {
-  let cardW = 74, cardH = 110, startY = 336, gap = 6;
-  if (handLength > 6) {
-    cardW = Math.max(48, 74 - (handLength - 6) * 4);
-    gap = Math.max(1, 6 - (handLength - 6) * 0.8);
+  let cardW, cardH, gap, startY;
+  if (handLength <= 5) {
+    cardW = 74; cardH = 110; gap = 8; startY = 336;
+  } else if (handLength <= 7) {
+    cardW = 62; cardH = 100; gap = 4; startY = 346;
+  } else if (handLength <= 9) {
+    cardW = 48; cardH = 88; gap = 2; startY = 354;
+  } else {
+    cardW = Math.floor((W - 20) / handLength - 1);
+    cardH = 80; gap = 1; startY = 360;
   }
   const totalW = handLength * cardW + (handLength - 1) * gap;
-  const startX = (W - totalW) / 2;
-  let cxPos = startX + index * (cardW + gap);
+  const startX = Math.max(2, (W - totalW) / 2);
+  const cxPos = startX + index * (cardW + gap);
   return { x: cxPos, y: startY, w: cardW, h: cardH };
 }
+const BASE_KEYS_ORDER = ["defenseWall", "armory", "arcaneTower", "alchemyLab", "trainingGround", "tradingPost", "infirmary"];
+// ==================== コアカード効果処理ルーチン ====================
+// ==================== クリック・ロジック ====================
+cv.addEventListener('mousemove', e => {
+  const rect = cv.getBoundingClientRect();
+  mx = (e.clientX - rect.left) * (512 / rect.width); my = (e.clientY - rect.top) * (460 / rect.height);
+});
+cv.addEventListener('click', e => {
+  const rect = cv.getBoundingClientRect();
+  mx = (e.clientX - rect.left) * (512 / rect.width); my = (e.clientY - rect.top) * (460 / rect.height);
 
+  if (gameState === "GAMEOVER") { initGame(); return; }
+  
+  if (gameState === "ENDING") {
+    let isClickDeep = (mx >= 60 && mx <= 230 && my >= 240 && my <= 280);
+    let isClickTitle = (mx >= 282 && mx <= 452 && my >= 240 && my <= 280);
+    if (isClickDeep) {
+      currentLoop++;
+      maxLoopReached = Math.max(maxLoopReached, currentLoop);
+      
+      let unowned = [];
+      if (!pRelics.loopCrown) unowned.push("loopCrown");
+      if (!pRelics.voidStone) unowned.push("voidStone");
+      
+      if (unowned.length > 0) {
+        let rRelic = unowned[Math.floor(Math.random() * unowned.length)]; pRelics[rRelic] = true;
+        dmgPopups.push({ text: `LOOP REWARD: ${RELIC_MASTER[rRelic].name}`, x: 256, y: 150, col: YELLOW, frames: 55 });
+        if (rRelic === "voidStone") { pMaxHP = Math.max(10, pMaxHP - 5); pHP = Math.min(pHP, pMaxHP); }
+      } else {
+        pGold += 50; dmgPopups.push({ text: "LOOP BONUS +50G", x: 256, y: 150, col: YELLOW, frames: 55 });
+      }
+
+      masterDeck.push("heavyStrain");
+      currentFloor = 1;
+      initFloor();
+    } else if (isClickTitle) {
+      initGame();
+    }
+    return;
+  }
+
+  if (gameState === "BASE_VIEW") {
+    let startY = 56; let blockH = 44; let gapY = 4; let shelterW = 480; let shelterX = (W - shelterW) / 2;
+
+    for (let i = 0; i < BASE_KEYS_ORDER.length; i++) {
+      let key = BASE_KEYS_ORDER[i]; let data = BASE_MASTER[key];
+      let lv = baseBuildings[key] || 0; if (lv >= data.maxLv) continue;
+
+      let y = startY + i * (blockH + gapY);
+      let cost = getBaseBuildCost(key);
+
+      if (mx >= shelterX && mx <= shelterX + shelterW && my >= y && my <= y + blockH && pMaterial >= cost) {
+        pMaterial -= cost;
+        baseBuildings[key]++;
+        sfxRare();
+        dmgPopups.push({ text: `${data.name} 拡張 Lv.${baseBuildings[key]}!`, x: 256, y: 230, col: "#FFA500", frames: 45 });
+        return;
+      }
+    }
+
+    let showForge = baseBuildings.armory >= 3;
+    let clickProcY = H - 42;
+    let procX = showForge ? W/2 - 130 : W/2 - 60, procW = 120, procH = 28;
+    // 【バグ修正箇所】 clickProcH ➔ procH
+    if (mx >= procX && mx <= procX + procW && my >= clickProcY && my <= clickProcY + procH) { proceedFromBase(); return; }
+
+    if (showForge) {
+      let forgeX = W/2 + 10, forgeW = 120, forgeH = 28;
+      // 【バグ修正箇所】 clickProcH ➔ forgeH
+      if (mx >= forgeX && mx <= forgeX + forgeW && my >= clickProcY && my <= clickProcY + forgeH) { gameState = "FORGE_VIEW"; sfxRare(); return; }
+    }
+    return;
+  }
+
+  if (gameState === "FORGE_VIEW") {
+    const rKeys = Object.keys(RECIPE_MASTER); let startY = 110;
+    for (let i = 0; i < rKeys.length; i++) {
+      let key = rKeys[i]; let data = RECIPE_MASTER[key]; let y = startY + i * 40;
+      let hasIngredients = true; let deckCopy = [...masterDeck];
+      for (let ing of data.ingredients) {
+        let idx = deckCopy.indexOf(ing); if (idx === -1) { hasIngredients = false; break; } else { deckCopy.splice(idx, 1); }
+      }
+      let canStart = hasIngredients && !activeForgeProject;
+      if (canStart) {
+        let btnX = W - 130, btnY = y + 7, btnW = 80, btnH = 20;
+        if (mx >= btnX && mx <= btnX + btnW && my >= btnY && my <= btnY + btnH) {
+          for (let ing of data.ingredients) { let idx = masterDeck.indexOf(ing); if (idx !== -1) masterDeck.splice(idx, 1); }
+          activeForgeProject = { recipeKey: key, remainingTurns: data.turns };
+          sfxLvUp(); dmgPopups.push({ text: `FORGE STARTED: ${data.name}`, x: 256, y: 200, col: "#FFD700", frames: 45 });
+          return;
+        }
+      }
+    }
+    let closeY = H - 40, closeW = 140, closeH = 30, closeX = W/2 - closeW/2;
+    if (mx >= closeX && mx <= closeX + closeW && my >= closeY && my <= closeY + closeH) { gameState = "BASE_VIEW"; sfxRare(); return; }
+    return;
+  }
+
+  if (gameState === "CLASS_SELECT") {
+    const boxW = 112, boxH = 210;
+    if (mx >= 12 && mx <= 12 + boxW && my >= 130 && my <= 130 + boxH) {
+      pClass = "WARRIOR"; pMaxHP = 50; pHP = 50;
+      masterDeck = ["strike", "strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "bash", "quick"];
+      pRelics.battleStandard = true; sfxLvUp(); initFloor(); return;
+    }
+    if (mx >= 134 && mx <= 134 + boxW && my >= 130 && my <= 130 + boxH) {
+      pClass = "SILENT"; pMaxHP = 40; pHP = 40;
+      masterDeck = ["strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "defend", "quick", "quick", "poisonD"];
+      pRelics.venomVial = true; sfxLvUp(); initFloor(); return;
+    }
+    if (mx >= 256 && mx <= 256 + boxW && my >= 130 && my <= 130 + boxH) {
+      pClass = "MAGE"; pMaxHP = 35; pHP = 35;
+      masterDeck = ["strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "zap", "zap", "charge"];
+      pRelics.arcaneBattery = true; sfxLvUp(); initFloor(); return;
+    }
+    if (mx >= 378 && mx <= 378 + boxW && my >= 130 && my <= 130 + boxH) {
+      pClass = "MERCHANT"; pMaxHP = 45; pHP = 45;
+      masterDeck = ["strike", "strike", "defend", "defend", "payday", "payday", "bribery", "goldSlam", "treasureArmor"];
+      pRelics.goldenScale = true; sfxLvUp(); initFloor(); return;
+    }
+    if (mx >= W/2 - 100 && mx <= W/2 + 100 && my >= 370 && my <= 415) {
+      let inputSeed = prompt("シード値を入力してください:", gameSeed);
+      if (inputSeed !== null && inputSeed.trim() !== "") setSeed(inputSeed.trim());
+      return;
+    }
+    return;
+  }
+
+  if (gameState === "MAP_SELECT") {
+    const boxW = 160, boxH = 100, bY = 160;
+    for (let i = 0; i < mapOptions.length; i++) {
+      let bX = 66 + i * 220;
+      if (mx >= bX && mx <= bX + boxW && my >= bY && my <= bY + boxH) {
+        let selectedOpt = mapOptions[i]; currentFloor++; sfxRare();
+        if (selectedOpt.type === "BATTLE") initFloor();
+        else if (selectedOpt.type === "EVENT") { gameState = "EVENT"; eventType = Math.random() < 0.5 ? "altar" : "fountain"; }
+        else if (selectedOpt.type === "SHOP") generateShopInventory();
+        else if (selectedOpt.type === "CAMPFIRE") gameState = "CAMPFIRE";
+        return;
+      }
+    }
+    return;
+  }
+
+  if (gameState === "CAMPFIRE") {
+    const boxW = 160, boxH = 100, bY = 160;
+    if (mx >= 66 && mx <= 66 + boxW && my >= bY && my <= bY + boxH) {
+      pHP = pMaxHP; sfxRare(); dmgPopups.push({ text: "REST: HP FULLY HEALED", x: 256, y: 200, col: GREEN, frames: 40 });
+      setTimeout(() => { proceedToNextFloor(); }, 800);
+    } else if (mx >= 286 && mx <= 286 + boxW && my >= bY && my <= bY + boxH) {
+      let ups = []; for (let i = 0; i < masterDeck.length; i++) { if (CARD_MASTER[masterDeck[i] + "+"] || CARD_MASTER[masterDeck[i] + "-"]) ups.push(i); }
+      if (ups.length > 0) { upgradeTargetIdx = ups[Math.floor(Math.random() * ups.length)]; upgradeSource = "CAMPFIRE"; gameState = "SMITH_BRANCH"; sfxRare(); }
+      else { dmgPopups.push({ text: "NO UPGRADEABLE CARDS", x: 256, y: 200, col: GRAY, frames: 35 }); setTimeout(() => { proceedToNextFloor(); }, 800); }
+    }
+    return;
+  }
+
+  if (gameState === "EVENT") {
+    if (eventType === "altar") {
+      if (mx >= 60 && mx <= 452 && my >= 150 && my <= 200) { pHP = Math.min(pMaxHP, pHP + 20); sfxRare(); initFloor(); }
+      else if (mx >= 60 && mx <= 452 && my >= 220 && my <= 270) {
+        let ups = masterDeck.filter(k => CARD_MASTER[k + "+"]);
+        if (ups.length > 0) { let rK = ups[Math.floor(Math.random() * ups.length)]; masterDeck[masterDeck.indexOf(rK)] = rK + "+"; sfxRare(); }
+        initFloor();
+      } else if (mx >= 60 && mx <= 452 && my >= 290 && my <= 340) {
+        let unowned = Object.keys(RELIC_MASTER).filter(k => !pRelics[k]);
+        if (unowned.length > 0) pRelics[unowned[Math.floor(Math.random() * unowned.length)]] = true;
+        masterDeck.push("regret"); sfxRare(); initFloor();
+      }
+    } else if (eventType === "fountain") {
+      if (mx >= 60 && mx <= 452 && my >= 150 && my <= 200) { masterDeck = masterDeck.map(k => k === "strike" ? "strike+" : k); sfxLvUp(); initFloor(); }
+      else if (mx >= 60 && mx <= 452 && my >= 220 && my <= 270) {
+        if (masterDeck.length > 0) {
+          masterDeck.splice(Math.floor(Math.random() * masterDeck.length), 1);
+          let rareKeys = Object.keys(CARD_MASTER).filter(k => CARD_MASTER[k].rare === "RARE" && k !== "regret" && k !== "decay");
+          masterDeck.push(rareKeys[Math.floor(Math.random() * rareKeys.length)]); sfxRare();
+        }
+        initFloor();
+      } else if (mx >= 60 && mx <= 452 && my >= 290 && my <= 340) { initFloor(); }
+    }
+    return;
+  }
+
+  if (gameState === "LEVELUP") {
+    if (mx >= 50 && mx <= 170 && my >= 200 && my <= 260) { pMaxHP += 5; pHP += 5; generateRewardOptions(); }
+    else if (mx >= 196 && mx <= 316 && my >= 200 && my <= 260) { pMaxEnergy += 1; generateRewardOptions(); }
+    else if (mx >= 342 && mx <= 462 && my >= 200 && my <= 260) {
+      if (masterDeck.filter(k => CARD_MASTER[k + "+"]).length > 0) { upgradeSource = "LEVELUP"; gameState = "UPGRADE_SCREEN"; }
+      else generateRewardOptions();
+    }
+    return;
+  }
+
+  if (gameState === "UPGRADE_SCREEN") {
+    let startX = 46, startY = 90;
+    for(let i=0; i<masterDeck.length; i++) {
+      if (!(CARD_MASTER[masterDeck[i] + "+"] || CARD_MASTER[masterDeck[i] + "-"])) continue;
+      if (mx >= startX + (i % 5) * 84 && mx <= startX + (i % 5) * 84 + 76 && my >= startY + Math.floor(i / 5) * 50 && my <= startY + Math.floor(i / 5) * 50 + 40) {
+        upgradeTargetIdx = i; upgradeSource = "LEVELUP"; gameState = "SMITH_BRANCH"; sfxRare(); return;
+      }
+    }
+    return;
+  }
+
+  if (gameState === "SMITH_BRANCH") {
+    const boxW = 160, boxH = 100, bY = 160; let cardKey = masterDeck[upgradeTargetIdx]; let selectedUp = "";
+    if (mx >= 66 && mx <= 66 + boxW && my >= bY && my <= bY + boxH) { if (CARD_MASTER[cardKey + "+"]) selectedUp = cardKey + "+"; }
+    else if (mx >= 286 && mx <= 286 + boxW && my >= bY && my <= bY + boxH) { if (CARD_MASTER[cardKey + "-"]) selectedUp = cardKey + "-"; }
+
+    if (selectedUp !== "") {
+      masterDeck[upgradeTargetIdx] = selectedUp; sfxRare();
+      dmgPopups.push({ text: `UPGRADED: ${CARD_MASTER[selectedUp].name}`, x: 200, y: 200, col: YELLOW, frames: 40 });
+      let trainBonus = getBaseEffect("trainingGround");
+      if (trainBonus > 0) { pPower += trainBonus; dmgPopups.push({ text: `TRAINING GROUND: POWER +${trainBonus}`, x: 256, y: 170, col: "#FFA500", frames: 45 }); }
+      setTimeout(() => { if (upgradeSource === "CAMPFIRE") proceedToNextFloor(); else generateRewardOptions(); }, 800);
+    }
+    return;
+  }
+
+  if (gameState === "REWARD") {
+    if (mx >= 196 && mx <= 316 && my >= 315 && my <= 345) { pHP = Math.min(pMaxHP, pHP + 15); proceedToNextFloor(); return; }
+    for(let i=0; i<3; i++) { if (mx >= 76 + i * 130 && mx <= 76 + i * 130 + 100 && my >= 135 && my <= 285) { masterDeck.push(rewardOptions[i]); proceedToNextFloor(); return; } }
+    return;
+  }
+
+  if (gameState === "SHOP") {
+    const sW = 86, sH = 150, sY = 125, gap = 10;
+    for(let i=0; i<shopInventory.length; i++) {
+      let item = shopInventory[i]; if (mx >= 18 + i * (sW + gap) && mx <= 18 + i * (sW + gap) + sW && my >= sY && my <= sY + sH && !item.bought) {
+        if (pGold >= item.cost) {
+          pGold -= item.cost; sfxRare();
+          if (item.type === "REMOVE") { activeShopItemIdx = i; gameState = "SHOP_REMOVE"; }
+          else if (item.type === "POTION") {
+            if (pPotions.length < 2) { item.bought = true; let types = ["healP", "poisP", "shieldP"]; let rType = types[Math.floor(Math.random() * types.length)]; pPotions.push(rType); }
+            else { pGold += item.cost; beep(140, 0.08, 'square', 0.1); }
+          } else if (item.type === "RELIC") { item.bought = true; pRelics[item.relicKey] = true; }
+          else if (item.type === "CARD") { item.bought = true; masterDeck.push(item.cardKey); }
+        }
+        return;
+      }
+    }
+    if (mx >= 206 && mx <= 306 && my >= 330 && my <= 360) proceedToNextFloor();
+    return;
+  }
+
+  if (gameState === "SHOP_REMOVE") {
+    let startX = 46, startY = 90;
+    for(let i=0; i<masterDeck.length; i++) {
+      if (mx >= startX + (i % 5) * 84 && mx <= startX + (i % 5) * 84 + 76 && my >= startY + Math.floor(i / 5) * 50 && my <= startY + Math.floor(i / 5) * 50 + 40) {
+        masterDeck.splice(i, 1); sfxAttack(); if(activeShopItemIdx !== -1) shopInventory[activeShopItemIdx].bought = true;
+        gameState = "SHOP"; return;
+      }
+    }
+    return;
+  }
+
+  if (gameState === "DECK_VIEW") { gameState = "BATTLE"; sfxDefend(); return; }
+
+  if (gameState === "BATTLE") {
+    if (mx >= 16 && mx <= 40 && my >= 245 && my <= 275) { deckViewSource = "DECK"; gameState = "DECK_VIEW"; sfxRare(); return; }
+    if (mx >= 472 && mx <= 496 && my >= 245 && my <= 275) { deckViewSource = "DISCARD"; gameState = "DECK_VIEW"; sfxRare(); return; }
+
+    let potY = 52;
+    for (let i = 0; i < pPotions.length; i++) {
+      if (mx >= 20 + i * 28 && mx <= 20 + i * 28 + 22 && my >= potY && my <= potY + 22) {
+        let pot = pPotions[i];
+        if (pot === "healP") pHP = Math.min(pMaxHP, pHP + 15);
+        else if (pot === "poisP") ePoison += 5 + (pRelics.sneckoSkull ? 1 : 0);
+        else if (pot === "shieldP") pBlock += 8;
+        sfxDefend(); pPotions.splice(i, 1); selectedIdx = -1; return;
+      }
+    }
+    if (mx >= 415 && mx <= 495 && my >= 298 && my <= 328) { runEnemyTurn(); return; }
+  }
+
+  if (gameState !== "BATTLE") return;
+
+  if (selectedIdx !== -1 && selectedIdx < hand.length) {
+    const targetIdx = selectedIdx; const cardKey = hand[targetIdx]; const cData = CARD_MASTER[cardKey];
+    if (cData.centerOnly && targetIdx !== Math.floor(hand.length / 2)) { beep(140, 0.08, 'square', 0.1); return; }
+
+    let currentCost = Math.max(0, cData.cost - nextCardCostMod - (handCostMods[targetIdx] || 0));
+    if (pEnergy >= currentCost) {
+      pEnergy -= currentCost; if (nextCardCostMod > 0) nextCardCostMod = 0; 
+      playedCardIdx = targetIdx; playedHandLength = hand.length;
+      hand.splice(targetIdx, 1); handCostMods.splice(targetIdx, 1);
+      
+      if (!cData.exhaust) discard.push(cardKey);
+      else triggerExhaustLogic();
+
+      let triggerEcho = (pRelics.echoRing && cData.type === "ATK" && isFirstAtkInTurn);
+      if(cData.type === "ATK" && isFirstAtkInTurn) isFirstAtkInTurn = false;
+
+      executeCardEffect(cardKey, false);
+      if (triggerEcho && eHP > 0) { setTimeout(() => { if (eHP > 0) executeCardEffect(cardKey, false); }, 250); }
+      selectedIdx = -1;
+      if (eHP <= 0) { eHP = 0; hand = []; discard = []; triggerEnemyDeathAnim(); }
+    } else {
+      beep(140, 0.08, 'square', 0.1); 
+    }
+  }
+});
+window.addEventListener('keydown', e => {
+  if (gameState !== "BATTLE") return;
+  if (e.code === "Space") runEnemyTurn();
+  if (e.key >= '1' && e.key <= '9') {
+    let idx = parseInt(e.key) - 1;
+    if (idx < hand.length) { selectedIdx = idx; cv.dispatchEvent(new Event('click')); }
+  }
+});
+initGame();
+loop();
+
+
+// --- data.js ---
+const CARD_MASTER = {
+  strike: { name: "STRIKE", cost: 1, type: "ATK", value: 6, desc: "ENEMY -6 HP", rare: "COMMON" },
+  defend: { name: "DEFEND", cost: 1, type: "DEF", value: 5, desc: "BLOCK +5", rare: "COMMON" },
+  bash:   { name: "BASH",   cost: 2, type: "ATK", value: 10, desc: "ENEMY -10 HP", rare: "COMMON", innate: true },
+  quick:  { name: "QUICK",  cost: 0, type: "ATK", value: 2, desc: "DMG 2 / DRAW 1", rare: "COMMON", draw: 1 },
+  focus:  { name: "FOCUS",  cost: 1, type: "DRW", value: 2, desc: "DRAW 2 CARDS", rare: "COMMON", draw: 2 },
+  poisonD:{ name: "P-DAGGER",cost: 1, type: "ATK", value: 3, desc: "DMG 3 / POISON 3", rare: "RARE", poison: 3 },
+  sbash:  { name: "S-BASH", cost: 2, type: "ATK", value: 0, desc: "DMG=BLOCK*70%(REQ>0)", rare: "RARE", isShieldBash: true },
+  rage:   { name: "RAGE",    cost: 1, type: "POW", value: 3, desc: "ATK+3 / LOSE BLK", rare: "RARE" },
+  heal:   { name: "MEDIC",   cost: 1, type: "HEAL",value: 8, desc: "YOU +8 HP", rare: "RARE" },
+  execute:{ name: "EXECUTE", cost: 1, type: "ATK", value: 5, desc: "IF ENEMY HP<=50%:20DMG", rare: "RARE", isExecute: true },
+  fortress:{ name: "FORTRESS",cost: 1, type: "ATK", value: 4, desc: "DMG 4 + 50% MY BLOCK", rare: "COMMON", isFortress: true },
+  toxicE: { name: "TOXIC-E", cost: 1, type: "ATK", value: 4, desc: "DMG 4 + POISON*3", rare: "RARE", isToxicDmg: true },
+  vampStrike: { name: "VAMP BLOW", cost: 2, type: "ATK", value: 9, desc: "DMG 9 / HEAL 40% DMG", rare: "RARE", vamp: 0.4 },
+  bBlast:     { name: "B-BLAST",   cost: 2, type: "ATK", value: 6, desc: "DMG = 6 + MY BLOCK", rare: "RARE", isBarrierBlast: true },
+  pNova:      { name: "P-NOVA",    cost: 2, type: "ATK", value: 4, desc: "DMG 4 / POISON 5 / BLK+6", rare: "RARE", poison: 5, addBlock: 6 },
+  pDraw:      { name: "P-DRAW",    cost: 1, type: "POW", value: 1, desc: "POWER +1 / DRAW 2", rare: "RARE", draw: 2 },
+  
+  heavyStrike: { name: "HEAVY STRIKE", cost: 2, type: "ATK", value: 12, desc: "DMG 12 / +1 POW if STRGT", rare: "RARE", strengthSynergy: true },
+  bodySlam:    { name: "BODY SLAM",    cost: 1, type: "ATK", value: 0,  desc: "DMG = CURRENT BLOCK", rare: "RARE", isBodySlam: true },
+  ironSkin:    { name: "IRON SKIN",    cost: 1, type: "POW", value: 3,  desc: "BLOCK +3 when DISCARD", rare: "RARE", ironSkin: true },
+  ruptures:    { name: "RUPTURES",     cost: 1, type: "POW", value: 0,  desc: "ATK played -> +1 POWER", rare: "RARE", ruptures: true },
+  catalyst:    { name: "CATALYST",     cost: 2, type: "ATK", value: 0,  desc: "DOUBLE ENEMY POISON", rare: "RARE", isCatalyst: true },
+  secondWind:  { name: "SECOND WIND",   cost: 2, type: "DEF", value: 8,  desc: "BLK 8 / EXHAUST HAND", rare: "RARE", exhaustSynergy: true },
+  dualWield:   { name: "DUAL WIELD",   cost: 1, type: "POW", value: 0,  desc: "COPY random ATK to hand", rare: "RARE", dualWield: true },
+  wildSwing:   { name: "WILD SWING",   cost: 1, type: "ATK", value: 14, desc: "DMG 14 / 30% SELF DMG 4", rare: "COMMON", risky: true },
+
+  adrenaline:  { name: "ADRENALINE",   cost: 0, type: "POW", value: 0,  desc: "NRG +2 / NEXT TURN -1", rare: "RARE", adrenaline: true },
+  flameBarrier:{ name: "FLAME BARRIER",cost: 2, type: "DEF", value: 12, desc: "BLOCK 12 / REFLECT 6", rare: "RARE", reflectPower: 6 },
+  offering:    { name: "OFFERING",     cost: 1, type: "ATK", value: 12, desc: "DMG 12 / LOSE 3 HP", rare: "RARE", isOffering: true },
+  carnage:     { name: "CARNAGE",      cost: 2, type: "ATK", value: 18, desc: "DMG 18 / EXHAUST", rare: "RARE", exhaust: true },
+  accuracy:    { name: "ACCURACY",     cost: 1, type: "POW", value: 0,  desc: "ALL ATK CARDS +3 DMG", rare: "RARE", accuracyBuff: 3 },
+  infiniteBlades:{ name: "INF BLADES", cost: 1, type: "POW", value: 0,  desc: "EVERY TURN ADD 1 SHIV", rare: "RARE", shivGen: true },
+  darkEmbrace: { name: "DARK EMBRACE", cost: 2, type: "POW", value: 0,  desc: "WHEN EXHAUST, DRAW 1", rare: "RARE", darkEmbrace: true },
+  biVamp:      { name: "BI-VAMP",      cost: 2, type: "ATK", value: 7,  desc: "DMG 7 / VAMP 50%/POIS 2", rare: "RARE", vamp: 0.5, poison: 2 },
+  
+  poisonBurst: { name: "POISON BURST", cost: 2, type: "ATK", value: 0, desc: "ENEMY POISON x2", rare: "RARE", isPoisonBurst: true, factor: 2 },
+  shieldSlam:  { name: "SHIELD SLAM",  cost: 1, type: "ATK", value: 0, desc: "LOSE BLK / DMG=BLK*2", rare: "RARE", isShieldSlam: true, factor: 2 },
+
+  regret:      { name: "REGRET",       cost: 9, type: "CURS", value: 0, desc: "UNPLAYABLE / T-END TAKE 2 DMG", rare: "COMMON" },
+  decay:       { name: "DECAY",        cost: 9, type: "CURS", value: 0, desc: "UNPLAYABLE / DISC TAKE 3 DMG", rare: "COMMON" },
+  wound:       { name: "WOUND",        cost: 9, type: "CURS", value: 0, desc: "UNPLAYABLE / NO EFFECT", rare: "COMMON" },
+  burn:        { name: "BURN",         cost: 9, type: "CURS", value: 0, desc: "UNPLAYABLE / T-END TAKE 1 DMG", rare: "COMMON" },
+  trueGrit:    { name: "TRUE GRIT",    cost: 1, type: "DEF",  value: 4, desc: "BLK 4 / EXHAUST RAND / DRAW 1", rare: "COMMON", isTrueGrit: true, draw: 1 },
+  feelNoPain:  { name: "FEEL NO PAIN", cost: 1, type: "POW",  value: 3, desc: "WHEN EXHAUST, BLOCK +3", rare: "RARE", feelNoPain: true },
+
+  zap:         { name: "ZAP",       cost: 0, type: "ATK", value: 7,  desc: "DMG 7", rare: "COMMON" },
+  charge:      { name: "CHARGE",    cost: 1, type: "POW", value: 1,  desc: "POW +1 / BLK +5", rare: "COMMON", chargeBlock: 5 },
+  lightningOrb:{ name: "LIGHTNING", cost: 1, type: "ATK", value: 8,  desc: "DMG 8 / WEAK 1", rare: "RARE", applyWeak: 1 },
+  chill:       { name: "CHILL",     cost: 1, type: "ATK", value: 4,  desc: "DMG 4 / VULN 2", rare: "RARE", vuln: 2 },
+
+  ghostlyArmor:{ name: "G-ARMOR",      cost: 1, type: "DEF",  value: 10, desc: "BLOCK 10 / RETAIN", rare: "RARE", retain: true },
+
+  inflame:      { name: "INFLAME",      cost: 1, type: "POW", value: 2,  desc: "STRENGTH +2", rare: "RARE", isInflame: true },
+  armaments:    { name: "ARMAMENTS",    cost: 1, type: "DEF", value: 5,  desc: "BLK 5 / UPGRADE 1 RAND CARD", rare: "COMMON", isArmaments: true },
+  flask:        { name: "FLASK",        cost: 2, type: "ATK", value: 0,  desc: "APPLY 3 POISON 3 TIMES", rare: "RARE", isFlask: true, poisonTimes: 3, poisonVal: 3 },
+  dblNrg:       { name: "DBL-NRG",      cost: 1, type: "POW", value: 0,  desc: "DOUBLE CURRENT ENERGY", rare: "RARE", isDoubleEnergy: true },
+  payday:       { name: "PAYDAY",       cost: 0, type: "ATK", value: 3,  desc: "DMG 3 / GOLD +5", rare: "COMMON", payday: true },
+  bribery:      { name: "BRIBERY",      cost: 1, type: "DEF", value: 0,  desc: "WEAK 1 / PAY 15G -> ENEMY ATK -5", rare: "RARE", bribery: true },
+  goldSlam:     { name: "GOLD SLAM",    cost: 2, type: "ATK", value: 0,  desc: "DMG = 20% OF GOLD", rare: "RARE", goldSlam: true },
+  leftBlast:    { name: "LEFT BLAST",   cost: 1, type: "ATK", value: 6,  desc: "LEFTMOST: DMG 6 -> 16", rare: "COMMON", leftBlast: true },
+  rightShield:  { name: "R-SHIELD",     cost: 1, type: "DEF", value: 5,  desc: "RIGHTMOST: BLK 5 -> 12", rare: "COMMON", rightShield: true },
+  centerCharge: { name: "C-CHARGE",     cost: 0, type: "DRW", value: 2,  desc: "CENTER ONLY: DRAW 2", rare: "COMMON", centerOnly: true },
+
+  "strike+": { name: "STRIKE+", cost: 1, type: "ATK", value: 10, desc: "ENEMY -10 HP", rare: "COMMON" },
+  "defend+": { name: "DEFEND+", cost: 1, type: "DEF", value: 8, desc: "BLOCK +8 / DRAW 1", draw: 1, rare: "COMMON" },
+  "bash+":   { name: "BASH+",   cost: 2, type: "ATK", value: 16, desc: "ENEMY -16 HP", rare: "COMMON", innate: true },
+  "quick+":  { name: "QUICK+",  cost: 0, type: "ATK", value: 4, desc: "DMG 4 / DRAW 1", rare: "COMMON", draw: 1 },
+  "focus+":  { name: "FOCUS+",  cost: 1, type: "DRW", value: 3, desc: "DRAW 3 CARDS", rare: "COMMON", draw: 3 },
+  "poisonD+":{ name: "P-DAGGER+",cost: 1, type: "ATK", value: 5, desc: "DMG 5 / POISON 5", rare: "RARE", poison: 5 },
+  "sbash+":  { name: "S-BASH+", cost: 2, type: "ATK", value: 0, desc: "DMG=BLOCK*100%(REQ>0)", rare: "RARE", isShieldBash: true, valueFactor: 1.0 },
+  "heal+":   { name: "MEDIC+",   cost: 1, type: "HEAL",value: 13, desc: "YOU +13 HP", rare: "RARE" },
+  "bodySlam+":{ name: "BODY SLAM+", cost: 0, type: "ATK", value: 0, desc: "DMG = CURRENT BLOCK", rare: "RARE", isBodySlam: true },
+  "heavyStrike+":{ name: "HEAVY STRIKE+", cost: 2, type: "ATK", value: 16, desc: "DMG 16 / +1 POW if STRGT", rare: "RARE", strengthSynergy: true },
+  "adrenaline+":{ name: "ADRENALINE+", cost: 0, type: "POW", value: 0, desc: "NRG +3 / NEXT TURN -1", rare: "RARE", adrenaline: true, adrenalineVal: 3 },
+  "wildSwing+":{ name: "WILD SWING+", cost: 1, type: "ATK", value: 16, desc: "DMG 16 / 15% SELF DMG 3", rare: "COMMON", risky: true, riskyProb: 0.15, riskyDmg: 3 },
+  "poisonBurst+":{ name: "POISON BURST+", cost: 2, type: "ATK", value: 0, desc: "ENEMY POISON x3", rare: "RARE", isPoisonBurst: true, factor: 3 },
+  "shieldSlam+": { name: "SHIELD SLAM+",  cost: 1, type: "ATK", value: 0, desc: "LOSE BLK / DMG=BLK*3", rare: "RARE", isShieldSlam: true, factor: 3 },
+  "trueGrit+":   { name: "TRUE GRIT+",    cost: 1, type: "DEF",  value: 7, desc: "BLK 7 / EXHAUST RAND / DRAW 1", rare: "COMMON", isTrueGrit: true, draw: 1 },
+  "feelNoPain+": { name: "FEEL NO PAIN+", cost: 1, type: "POW",  value: 4, desc: "WHEN EXHAUST, BLOCK +4", rare: "RARE", feelNoPain: true },
+  "ghostlyArmor+":{ name: "G-ARMOR+",   cost: 1, type: "DEF",  value: 14, desc: "BLOCK 14 / RETAIN", rare: "RARE", retain: true },
+  "zap+":          { name: "ZAP+",       cost: 0, type: "ATK", value: 10, desc: "DMG 10", rare: "COMMON" },
+  "charge+":       { name: "CHARGE+",    cost: 1, type: "POW", value: 2,  desc: "POW +2 / BLK +8", rare: "COMMON", chargeBlock: 8 },
+  "lightningOrb+": { name: "LIGHTNING+", cost: 1, type: "ATK", value: 12, desc: "DMG 12 / WEAK 2", rare: "RARE", applyWeak: 2 },
+  "chill+":        { name: "CHILL+",     cost: 1, type: "ATK", value: 6,  desc: "DMG 6 / VULN 3", rare: "RARE", vuln: 3 },
+
+  "inflame+":   { name: "INFLAME+",     cost: 1, type: "POW", value: 3,  desc: "STRENGTH +3", rare: "RARE", isInflame: true },
+  "armaments+": { name: "ARMAMENTS+",   cost: 1, type: "DEF", value: 8,  desc: "BLK 8 / UPGRADE 1 RAND CARD", rare: "COMMON", isArmaments: true },
+  "flask+":     { name: "FLASK+",       cost: 2, type: "ATK", value: 0,  desc: "APPLY 4 POISON 3 TIMES", rare: "RARE", isFlask: true, poisonTimes: 3, poisonVal: 4 },
+  "dodge+":     { name: "DODGE+",       cost: 1, type: "DEF", value: 6,  desc: "BLK 6 / NEXT TURN BLK 6", rare: "COMMON", isDodge: true, nextBlock: 6 },
+  "tStrike+":   { name: "T-STRIKE+",    cost: 3, type: "ATK", value: 0,  desc: "DMG = 7 x COMBAT ATKS PLAYED", rare: "RARE", isThunderStrike: true, factor: 7 },
+  "dblNrg+":    { name: "DBL-NRG+",     cost: 0, type: "POW", value: 0,  desc: "DOUBLE CURRENT ENERGY", rare: "RARE", isDoubleEnergy: true },
+  
+  heavyStrain:  { name: "STRAIN",       cost: 9, type: "CURS", value: 0,  desc: "UNPLAYABLE / T-END TAKE DMG = LOOP", rare: "COMMON" },
+  "strike-":    { name: "STRIKE-",      cost: 0, type: "ATK", value: 6,   desc: "ENEMY -6 HP / COST 0", rare: "COMMON" },
+  "defend-":    { name: "DEFEND-",      cost: 0, type: "DEF", value: 5,   desc: "BLOCK +5 / COST 0", rare: "COMMON" },
+  "bash-":      { name: "BASH-",        cost: 1, type: "ATK", value: 10,  desc: "ENEMY -10 HP / COST 1", rare: "COMMON", innate: true },
+  "zap-":       { name: "ZAP-",         cost: 0, type: "ATK", value: 5,   desc: "DMG 5 / COST 0", rare: "COMMON" },
+
+  shiv:        { name: "SHIV",         cost: 0, type: "ATK", value: 4,  desc: "DMG 4 / EXHAUST TOKEN", rare: "COMMON", exhaust: true },
+
+  treasureArmor: { name: "TREASURE ARMOR", cost: 1, type: "DEF", value: 0, desc: "BLK = 10% OF GOLD", rare: "COMMON", treasureArmor: true },
+  "treasureArmor+": { name: "TREASURE ARMOR+", cost: 0, type: "DEF", value: 0, desc: "BLK = 10% OF GOLD", rare: "COMMON", treasureArmor: true },
+  mercenary: { name: "MERCENARY", cost: 1, type: "ATK", value: 20, desc: "DMG 20 / PAY 15 GOLD", rare: "RARE", mercenary: true },
+  "mercenary+": { name: "MERCENARY+", cost: 1, type: "ATK", value: 28, desc: "DMG 28 / PAY 15 GOLD", rare: "RARE", mercenary: true }
+};
+const ENEMY_TEMPLATES = {
+  1: { name: "GOBLIN", hp: 25, type: "goblin", exp: 15 },
+  2: { name: "SLIME", hp: 35, type: "slime", exp: 20 },
+  3: { name: "ELITE ORC", hp: 55, type: "orc", exp: 35 },
+  4: { name: "EVIL MAGE", hp: 58, type: "mage", exp: 40 },
+  5: { name: "DRAGON (BOSS)", hp: 120, type: "dragon", exp: 100 },
+  6: { name: "LICH (BOSS)", hp: 100, type: "lich", exp: 100 }
+};
+const RELIC_MASTER = {
+  redGem:      { name: "RED GEM",      desc: "PERMANENT ATK +2", cost: 40 },
+  blueGem:     { name: "BLUE GEM",     desc: "TURN START BLK +3", cost: 40 },
+  greenGem:    { name: "GREEN GEM",    desc: "MAX ENERGY +1", cost: 65 },
+  funnel:      { name: "FUNNEL",       desc: "COMBAT START POIS 3", cost: 50 },
+  ninjaScroll: { name: "NINJA SCROLL", desc: "3 ATK played -> DMG 4", cost: 55 },
+  letterOpener:{ name: "LETTER OPENER",desc: "3 DEF played -> DMG 6", cost: 55 },
+  echoRing:    { name: "ECHO RING",    desc: "1st ATK played TWICE", cost: 60 },
+  burningBlood:{ name: "BURNING BLOOD",desc: "WIN COMBAT -> HP +6", cost: 50 },
+  sneckoSkull: { name: "SNECKO SKULL", desc: "POISON APPLY +1", cost: 45 },
+  mummifiedHand:{ name:"MUMMY HAND",  desc: "POW PLAY -> RAND -1 COST", cost: 60 },
+  goldBag:     { name: "GOLD BAG",     desc: "COMBAT START GOLD +5G", cost: 45 },
+  loopCrown:   { name: "LOOP CROWN",   desc: "PERMANENT ATK +3", cost: 50 },
+  voidStone:   { name: "VOID STONE",   desc: "TURN START NRG +1 / MAX HP -5", cost: 50 },
+  battleStandard:{ name: "BATTLE STANDARD", desc: "ATK PLAY -> BLOCK +2", cost: 50 },
+  arcaneBattery:{ name: "ARCANE BATTERY", desc: "POWER PLAY -> DRAW 1", cost: 55 },
+  goldenScale: { name: "GOLDEN SCALE", desc: "TURN START -> BLK += GOLD*5%", cost: 60 },
+  venomVial:   { name: "VENOM VIAL",   desc: "COMBAT START -> POISON +2", cost: 50 }
+};
+const BASE_MASTER = {
+  defenseWall:   { name: "DEFENSE WALL",    emoji: "🛡️", desc: "ターン開始 BLOCK +{v}",     maxLv: 5, baseCost: 10, effectPerLv: 2, bgCol: "#1e223b" },
+  armory:        { name: "ARMORY",          emoji: "🗡️", desc: "ATK カード +{v} DMG",       maxLv: 5, baseCost: 8,  effectPerLv: 2, bgCol: "#3b1e1e" },
+  arcaneTower:   { name: "ARCANE TOWER",    emoji: "🔮", desc: "POWER 効果 +{v}",           maxLv: 5, baseCost: 12, effectPerLv: 1, bgCol: "#2c1e3b" },
+  alchemyLab:    { name: "ALCHEMY LAB",     emoji: "⚗️", desc: "開幕敵毒付与 +{v}",          maxLv: 5, baseCost: 11, effectPerLv: 1, bgCol: "#2d3b1e" },
+  trainingGround:{ name: "TRAINING GROUND", emoji: "⚔️", desc: "アップグレードパワー +{v}", maxLv: 3, baseCost: 15, effectPerLv: 1, bgCol: "#1e353b" },
+  tradingPost:   { name: "TRADING POST",    emoji: "🏪", desc: "ショップ価格 -{v}%",        maxLv: 3, baseCost: 9,  effectPerLv: 10, bgCol: "#3b361e" },
+  infirmary:     { name: "INFIRMARY",       emoji: "🏥", desc: "戦闘開始時 HP +{v}",        maxLv: 5, baseCost: 10, effectPerLv: 5, bgCol: "#1e3b23" }
+};
+const RECIPE_MASTER = {
+  heavyStrike: { ingredients: ["strike", "strike"],      result: "heavyStrike",  turns: 2, name: "DOUBLE FORGE" },
+  pNova:       { ingredients: ["bash", "poisonD"],       result: "pNova",        turns: 3, name: "TOXIC INFUSION" },
+  catalyst:    { ingredients: ["poisonD", "toxicE"],     result: "catalyst",     turns: 3, name: "CATALYST BREW" },
+  ironSkin:    { ingredients: ["defend", "defend"],      result: "ironSkin",     turns: 2, name: "IRON FUSION" },
+  "strike-":   { ingredients: ["strike", "quick"],       result: "strike-",      turns: 2, name: "LIGHTWEIGHT ATK" }
+};
+function getBaseEffect(key) {
+  let lv = baseBuildings[key] || 0;
+  if (lv === 0) return 0;
+  let base = BASE_MASTER[key].effectPerLv * lv;
+  if ((pClass === "WARRIOR" && key === "armory") ||
+      (pClass === "MAGE" && key === "arcaneTower") ||
+      (pClass === "MERCHANT" && key === "tradingPost")) {
+    base = Math.ceil(base * 1.5);
+  }
+  return base;
+}
+function getBaseBuildCost(key) {
+  let lv = baseBuildings[key] || 0;
+  let data = BASE_MASTER[key];
+  return Math.floor(data.baseCost * (1 + lv * 0.5));
+}
+let playedCardIdx = -1;
+function generateRewardOptions() {
+  gameState = "REWARD";
+  sfxWin();
+  rewardOptions = [];
+  const allKeys = Object.keys(CARD_MASTER).filter(k => k !== "shiv" && k !== "regret" && k !== "decay" && k !== "wound" && k !== "burn"); 
+  
+  while(rewardOptions.length < 3) {
+    let rK = allKeys[Math.floor(gameRandom() * allKeys.length)];
+    if (!rewardOptions.includes(rK)) rewardOptions.push(rK);
+  }
+  shuffle(rewardOptions);
+}
+function generateShopInventory() {
+  gameState = "SHOP";
+  shopInventory = [];
+  const keys = Object.keys(CARD_MASTER).filter(k => k !== "shiv" && k !== "regret" && k !== "decay" && k !== "wound" && k !== "burn");
+  
+  for(let i=0; i<2; i++) {
+    let rKey = keys[Math.floor(gameRandom() * keys.length)];
+    let rarityPrice = CARD_MASTER[rKey].rare === "RARE" ? 35 : 20;
+    shopInventory.push({ type: "CARD", cardKey: rKey, cost: rarityPrice, bought: false });
+  }
+  
+  const relicKeys = Object.keys(RELIC_MASTER).filter(k => !pRelics[k]);
+  if (relicKeys.length > 0) {
+    shuffle(relicKeys);
+    let rRelic = relicKeys[0];
+    shopInventory.push({ type: "RELIC", relicKey: rRelic, cost: RELIC_MASTER[rRelic].cost, bought: false });
+  }
+
+  shopInventory.push({ type: "POTION", cost: 15, bought: false });
+  shopInventory.push({ type: "REMOVE", cost: 25, bought: false });
+
+  let tradingDiscount = getBaseEffect("tradingPost");
+  if (tradingDiscount > 0) {
+    shopInventory.forEach(item => {
+      item.cost = Math.max(1, Math.floor(item.cost * (1 - tradingDiscount / 100)));
+    });
+  }
+}
+function initFloor() {
+  gameState = "BATTLE";
+  let t = ENEMY_TEMPLATES[currentFloor] || ENEMY_TEMPLATES[1];
+  if (currentFloor === 5) {
+    t = gameRandom() < 0.5 ? ENEMY_TEMPLATES[5] : ENEMY_TEMPLATES[6];
+  }
+  eName = t.name; 
+  
+  let hpMultiplier = 1 + (currentLoop - 1) * 0.5;
+  let finalHP = Math.floor(t.hp * hpMultiplier);
+  eHP = finalHP; eMaxHP = finalHP;
+  
+  // === 【バランス調整】プレイヤーの一時的なバフ・デバフ・シールドをリセット ===
+  pPoison = 0;
+  pWeak = 0;
+  pVuln = 0;
+  pFrail = 0;
+  pBlock = 0;
+  pPower = 0;
+  pReflect = 0;
+  
+  // === 戦闘中のカード特殊効果累積カウントも一括リセット ===
+  activeRupturesCount = 0;
+  activeIronSkinCount = 0;
+  activeAccuracyBonus = 0;
+  activeInfiniteBladesCount = 0;
+  activeDarkEmbraceCount = 0;
+  activeFeelNoPainCount = 0;
+  nextTurnEnergyMod = 0;
+  nextTurnBlock = 0;
+  combatAtkCount = 0;
+
+  // === エネミー側の基本状態リセット ===
+  eBlock = 0; eType = t.type; eExpReward = t.exp; eTurnCount = 0;
+  eWeak = eVuln = 0;
+
+  let labBonus = getBaseEffect("alchemyLab");
+  ePoison = (pRelics.funnel ? 3 : 0) + (pRelics.venomVial ? 2 : 0) + labBonus;
+  if (labBonus > 0) {
+    dmgPopups.push({ text: `ALCHEMY LAB POISON +${labBonus}`, x: 380, y: 125, col: "#FFA500", frames: 40 });
+  }
+  if (pRelics.venomVial) {
+    dmgPopups.push({ text: "VENOM VIAL POISON +2", x: 380, y: 140, col: GREEN, frames: 40 });
+  }
+  let infHeal = getBaseEffect("infirmary");
+  if (infHeal > 0) {
+    pHP = Math.min(pMaxHP, pHP + infHeal);
+    dmgPopups.push({ text: `INFIRMARY +${infHeal} HP`, x: 100, y: 170, col: "#FFA500", frames: 40 });
+  }
+  
+  let loopThorns = currentLoop >= 2 ? (currentLoop - 1) : 0;
+  eThorns = ((t.type === "orc") ? 3 : 0) + loopThorns; 
+  
+  if (currentLoop >= 4) eBlock = (currentLoop - 3) * 5;
+
+  ePhase2Triggered = false;
+  isFirstTurnOfCombat = true;
+  activeSlimeSplitted = false;
+  slimeChildHP1 = 0;
+  slimeChildHP2 = 0;
+  
+  deck = [...masterDeck];
+  hand = []; discard = [];
+  handCostMods = [];
+  shuffle(deck);
+  if (pRelics.goldBag) {
+    pGold += 5;
+    dmgPopups.push({ text: "GOLD BAG +5G", x: 100, y: 150, col: YELLOW, frames: 40 });
+  }
+  startPlayerTurn();
+}
+const STATUS_DESCS = {
+  "POIS": { name: "POISON (毒)", desc: "ターン開始時にダメージを受け、値が1減少します。" },
+  "WEAK": { name: "WEAK (脱力)", desc: "与えるアタックのダメージが50%減少します。" },
+  "VULN": { name: "VULNERABLE (脆弱)", desc: "受けるアタックのダメージが50%増加します。" },
+  "REFL": { name: "REFLECT (反射)", desc: "攻撃を受けた際、攻撃者にこの値のダメージを与えます。" },
+  "POWER": { name: "STRENGTH (筋力)", desc: "アタックのダメージがこの値だけ増加します。" },
+  "THORNS": { name: "THORNS (トゲ)", desc: "攻撃を受けるたびに、攻撃者にこの値のダメージを与えます。" },
+  "redGem": { name: "RED GEM (赤の宝石)", desc: "恒久的にアタックのダメージが +2 されます。" },
+  "blueGem": { name: "BLUE GEM (青の宝石)", desc: "ターン開始時、シールド(ブロック)を 3 得ます。" },
+  "greenGem": { name: "GREEN GEM (緑の宝石)", desc: "最大エネルギー(MP)が +1 されます。" },
+  "funnel": { name: "FUNNEL (漏斗)", desc: "戦闘開始時、敵に毒を 3 付与します。" },
+  "ninjaScroll": { name: "NINJA SCROLL (忍者の巻物)", desc: "アタックを3回プレイするたびに、敵に4ダメージ与えます。" },
+  "letterOpener": { name: "LETTER OPENER (ペーパーナイフ)", desc: "防御(DEF)を3回プレイするたびに、敵に6ダメージ与えます。" },
+  "echoRing": { name: "ECHO RING (反響の指輪)", desc: "各ターンに最初に使用するアタックが2回発動します。" },
+  "sneckoSkull": { name: "SNECKO SKULL (スネッコの頭骨)", desc: "敵に毒を付与する時、付与する毒の値が +1 されます。" },
+  "mummifiedHand": { name: "MUMMIFIED HAND (ミイラの手)", desc: "パワーカードを使用するたび、手札のランダムカードのコストを 0 にします。" },
+  "FRAIL": { name: "FRAIL (衰弱)", desc: "防御カードで得られるシールドの値が 50% 減少します。" },
+  "goldBag": { name: "GOLD BAG (商人の金袋)", desc: "戦闘開始時、ゴールドを +5G 得ます。" },
+  "loopCrown":  { name: "LOOP CROWN (ループの王冠)", desc: "恒久的にアタックのダメージが +3 されます。" },
+  "voidStone":  { name: "VOID STONE (虚無の石)", desc: "ターン開始時のエネルギーが +1 されますが、最大HPが 5 減少します。" },
+  "battleStandard": { name: "BATTLE STANDARD (戦旗)", desc: "攻撃カード使用時、シールドを 2 得ます。" },
+  "arcaneBattery":  { name: "ARCANE BATTERY (魔力電池)", desc: "パワーカード使用時、カードを 1 枚ドローします。" },
+  "goldenScale":    { name: "GOLDEN SCALE (黄金の天秤)", desc: "ターン開始時、所持ゴールドの 5% のシールドを得ます。" },
+  "venomVial":      { name: "VENOM VIAL (毒の小瓶)", desc: "戦闘開始時、敵に毒を 2 付与します。" }
+};
+function executeCardEffect(cardKey, simulated) {
+  const cData = CARD_MASTER[cardKey]; if (!cData) return;
+  let baseVal = cData.value;
+  if (cData.type === "ATK") baseVal += activeAccuracyBonus;
+  
+  let finalVal = baseVal;
+  let armoryBonus = (cData.type === "ATK") ? getBaseEffect("armory") : 0;
+  let playerFinalPowerBonus = pPower + (pRelics.redGem ? 2 : 0) + (pRelics.loopCrown ? 3 : 0) + armoryBonus; 
+  if (cData.type === "ATK" && pWeak > 0) finalVal = Math.floor(finalVal * 0.5);
+
+  if (cData.type === "ATK") {
+    if(!simulated) {
+      sfxAttack(); enemyShakeFrame = 8; turnAtkCount++; combatAtkCount++;
+      if(activeRupturesCount > 0) { pPower += activeRupturesCount; dmgPopups.push({ text: `RUPTURES +${activeRupturesCount} POW`, x: 100, y: 150, col: PURPLE, frames: 35 }); }
+      if(pRelics.ninjaScroll && turnAtkCount % 3 === 0) { eHP -= 4; dmgPopups.push({ text: "SCROLL SHURIKEN -4", x: 380, y: 110, col: YELLOW, frames: 35 }); }
+      if (pRelics.battleStandard) { pBlock += 2; dmgPopups.push({ text: "BATTLE STANDARD BLOCK +2", x: 100, y: 120, col: CYAN, frames: 30 }); }
+    }
+
+    let isCrit = Math.random() < 0.05; let baseDmg = finalVal + playerFinalPowerBonus;
+    if (cData.isShieldBash) baseDmg = Math.floor(pBlock * (cData.valueFactor || 0.7));
+    else if (cData.isExecute) { if (eHP <= (eMaxHP / 2)) baseDmg = 20; }
+    else if (cData.isFortress) baseDmg = finalVal + Math.floor(pBlock * 0.5);
+    else if (cData.isToxicDmg) baseDmg = finalVal + (ePoison * 3);
+    else if (cData.isBarrierBlast) baseDmg = finalVal + pBlock; 
+    else if (cData.isBodySlam) baseDmg = pBlock;
+    else if (cData.isShieldSlam) { baseDmg = pBlock * (cData.factor || 2); if(!simulated) pBlock = 0; }
+    else if (cData.isPoisonBurst) { baseDmg = 0; if(!simulated) { ePoison *= (cData.factor || 2); dmgPopups.push({ text: `💥BURST POIS x${cData.factor || 2} (${ePoison})`, x: 380, y: 130, col: GREEN, frames: 45 }); } }
+    else if (cData.strengthSynergy) { baseDmg = finalVal + playerFinalPowerBonus; if(playerFinalPowerBonus > 0 && !simulated) { pPower += 1; dmgPopups.push({ text: "HEAVY STRGT +1 POW", x: 100, y: 130, col: PURPLE, frames: 35 }); } }
+    else if (cData.isCatalyst) { baseDmg = 0; if(!simulated) { ePoison *= 2; dmgPopups.push({ text: `💥CATALYST POIS x2 (${ePoison})`, x: 380, y: 130, col: GREEN, frames: 45 }); } }
+    else if (cData.risky) { baseDmg = cData.value; if(!simulated && Math.random() < (cData.riskyProb || 0.3)) { pHP = Math.max(1, pHP - (cData.riskyDmg || 4)); dmgPopups.push({ text: `WILD RECOIL -${cData.riskyDmg || 4} HP`, x: 100, y: 160, col: RED, frames: 35 }); } }
+    else if (cData.isOffering) { baseDmg = 12 + activeAccuracyBonus; if(!simulated) { pHP = Math.max(1, pHP - 3); dmgPopups.push({ text: "OFFERING SACRIFICE -3 HP", x: 100, y: 160, col: RED, frames: 35 }); } }
+    else if (cData.isFlask) {
+      baseDmg = 0;
+      if (!simulated) {
+        let times = cData.poisonTimes || 3; let pVal = cData.poisonVal || 3; let totalAdded = 0;
+        for (let t = 0; t < times; t++) { let pGain = pVal + (pRelics.sneckoSkull ? 1 : 0); ePoison += pGain; totalAdded += pGain; }
+        dmgPopups.push({ text: `FLASK POISON +${totalAdded}`, x: 380, y: 140, col: GREEN, frames: 45 });
+      }
+    } else if (cData.isThunderStrike) baseDmg = combatAtkCount * (cData.factor || 5);
+    else if (cData.goldSlam) baseDmg = Math.floor(pGold * 0.2);
+    else if (cData.leftBlast) baseDmg = (playedCardIdx === 0) ? 16 : 6;
+
+    if (cData.mercenary && !simulated) { pGold = Math.max(0, pGold - 15); dmgPopups.push({ text: "MERCENARY PAY -15G", x: 100, y: 150, col: YELLOW, frames: 35 }); }
+    if (cData.payday && !simulated) { pGold += 5; dmgPopups.push({ text: "PAYDAY +5G", x: 100, y: 150, col: YELLOW, frames: 35 }); }
+
+    let dmg = isCrit ? baseDmg * 2 : baseDmg;
+    if (eType && eVuln > 0) dmg = Math.floor(dmg * 1.5);
+
+    let actualDmgDealt = 0;
+    if (dmg > 0) {
+      if (!simulated) { totalDamageDealt += dmg; turnDamageDealt += dmg; }
+      if (eType === "slime" && (slimeChildHP1 > 0 || slimeChildHP2 > 0)) {
+        if (slimeChildHP1 > 0) { let sd = Math.min(slimeChildHP1, dmg); slimeChildHP1 -= sd; actualDmgDealt = sd; dmgPopups.push({ text: `MINI-SLIME 1: -${dmg}`, x: 340, y: 200, col: CYAN, frames: 35 }); }
+        else if (slimeChildHP2 > 0) { let sd = Math.min(slimeChildHP2, dmg); slimeChildHP2 -= sd; actualDmgDealt = sd; dmgPopups.push({ text: `MINI-SLIME 2: -${dmg}`, x: 420, y: 200, col: CYAN, frames: 35 }); }
+      } else {
+        if (eBlock >= dmg) { eBlock -= dmg; if(!simulated) dmgPopups.push({ text: "ENEMY BLOCKED", x: 380, y: 160, col: "#00c8d0", frames: 40 }); }
+        else { dmg -= eBlock; eBlock = 0; eHP -= dmg; actualDmgDealt = dmg; if(!simulated) dmgPopups.push({ text: isCrit ? `💥CRITICAL! -${dmg}` : `-${dmg}`, x: 380, y: 150, col: isCrit ? YELLOW : RED, frames: 45 }); }
+      }
+    }
+
+    if (!simulated) {
+      if (eThorns > 0) {
+        let thornsDmg = eThorns;
+        if (pBlock >= thornsDmg) {
+          pBlock -= thornsDmg;
+          dmgPopups.push({ text: `THORNS BLOCKED`, x: 100, y: 175, col: "#00c8d0", frames: 35 });
+        } else {
+          thornsDmg -= pBlock;
+          pBlock = 0;
+          pHP -= thornsDmg;
+          dmgPopups.push({ text: `THORNS -${thornsDmg}`, x: 100, y: 175, col: RED, frames: 35 });
+          flashFrame = 6;
+        }
+        if (pHP <= 0) { pHP = 0; gameState = "GAMEOVER"; }
+      }
+
+      if (cData.vamp) { const healAmount = Math.floor(actualDmgDealt * cData.vamp); if(healAmount > 0) { pHP = Math.min(pMaxHP, pHP + healAmount); dmgPopups.push({ text: `+${healAmount} VAMP`, x: 100, y: 145, col: GREEN, frames: 40 }); } }
+      if (cData.poison) { let pGain = cData.poison + (pRelics.sneckoSkull ? 1 : 0); ePoison += pGain; dmgPopups.push({ text: `POISON +${pGain}`, x: 380, y: 140, col: GREEN, frames: 35 }); }
+      if (cData.addBlock) pBlock += cData.addBlock;
+      if (cData.applyWeak) { eWeak += cData.applyWeak; dmgPopups.push({ text: `WEAKENED +${cData.applyWeak}`, x: 380, y: 120, col: GREEN, frames: 35 }); }
+      if (cData.vuln) { eVuln += cData.vuln; dmgPopups.push({ text: `VULNERABLE +${cData.vuln}`, x: 380, y: 130, col: YELLOW, frames: 35 }); } 
+    }
+
+  } else if (cData.type === "DEF") {
+    if(!simulated) { turnDefCount++; if(pRelics.letterOpener && turnDefCount % 3 === 0) { eHP -= 6; dmgPopups.push({ text: "OPENER SLASH -6", x: 380, y: 110, col: CYAN, frames: 35 }); } }
+
+    let blockGain = finalVal;
+    if (cData.treasureArmor) blockGain = Math.floor(pGold * 0.1);
+    if (cData.rightShield) blockGain = (playedCardIdx === playedHandLength - 1) ? 12 : 5;
+    if (cData.bribery && !simulated) {
+      eWeak += 1; dmgPopups.push({ text: "BRIBERY: WEAK 1", x: 380, y: 120, col: GREEN, frames: 35 });
+      if (pGold >= 15) { pGold -= 15; eIntent.value = Math.max(0, eIntent.value - 5); dmgPopups.push({ text: "PAY 15G: ENEMY ATK -5", x: 380, y: 140, col: RED, frames: 35 }); }
+    }
+    if (cData.exhaustSynergy && !simulated) {
+      let count = hand.length; triggerDiscardBlockLogic(count); discard.push(...hand); hand = []; blockGain += (count * 4);
+      dmgPopups.push({ text: `EXHAUST WIND +${count * 4}`, x: 100, y: 130, col: CYAN, frames: 40 });
+      for(let ex=0; ex<count; ex++) triggerExhaustLogic(); 
+    }
+    if (cData.isTrueGrit && !simulated && hand.length > 0) { hand.splice(Math.floor(Math.random() * hand.length), 1); dmgPopups.push({ text: "🔥EXHAUSTED", x: 256, y: 260, col: GRAY, frames: 35 }); triggerExhaustLogic(); }
+    if (cData.isArmaments && !simulated) {
+      let ups = []; for (let i = 0; i < hand.length; i++) { if (CARD_MASTER[hand[i] + "+"]) ups.push(i); }
+      if (ups.length > 0) { let t = ups[Math.floor(Math.random() * ups.length)]; hand[t] = hand[t] + "+"; dmgPopups.push({ text: `UPGRADED: ${CARD_MASTER[hand[t]].name}`, x: 256, y: 240, col: YELLOW, frames: 45 }); }
+    }
+    if (cData.isDodge && !simulated) { nextTurnBlock += cData.nextBlock || 4; dmgPopups.push({ text: `NEXT BLOCK +${cData.nextBlock || 4}`, x: 100, y: 135, col: CYAN, frames: 35 }); }
+    if (pFrail > 0) blockGain = Math.floor(blockGain * 0.5);
+    if (cData.reflectPower && !simulated) { pReflect += cData.reflectPower; dmgPopups.push({ text: `REFLECT SHIELD +${cData.reflectPower}`, x: 100, y: 130, col: RED, frames: 35 }); }
+
+    pBlock += blockGain;
+    if(!simulated) dmgPopups.push({ text: `+${blockGain}`, x: 100, y: 160, col: CYAN, frames: 40 });
+
+  } else if (cData.type === "POW") {
+    if(!simulated) {
+      sfxRarePower();
+      if (pRelics.arcaneBattery) { drawCards(1); dmgPopups.push({ text: "ARCANE BATTERY DRAW +1", x: 100, y: 90, col: PURPLE, frames: 35 }); }
+      if(cData.ruptures) activeRupturesCount++;
+      if(cData.ironSkin) activeIronSkinCount++;
+      if(cData.accuracyBuff) activeAccuracyBonus += cData.accuracyBuff;
+      if(cData.shivGen) activeInfiniteBladesCount++;
+      if(cData.darkEmbrace) activeDarkEmbraceCount++;
+      if(cData.feelNoPain) activeFeelNoPainCount += cData.value;
+      if(cData.adrenaline) { pEnergy += cData.adrenalineVal || 2; nextTurnEnergyMod = -1; dmgPopups.push({ text: `ADRENALINE NRG +${cData.adrenalineVal || 2}`, x: 100, y: 130, col: BLUE, frames: 40 }); }
+      
+      pPower += finalVal + getBaseEffect("arcaneTower"); 
+      if(cardKey === "rage") pBlock = 0; 
+      if(cData.chargeBlock) { pBlock += cData.chargeBlock; dmgPopups.push({ text: `CHARGE BLK +${cData.chargeBlock}`, x: 100, y: 130, col: CYAN, frames: 35 }); }
+      if(cData.dualWield) { let aks = Object.keys(CARD_MASTER).filter(k => CARD_MASTER[k].type === "ATK"); let sp = aks[Math.floor(Math.random() * aks.length)]; if(hand.length < 10) { hand.push(sp); handCostMods.push(0); } }
+      if(cData.isDoubleEnergy) { pEnergy = pEnergy * 2; dmgPopups.push({ text: `ENERGY DOUBLED: ${pEnergy}`, x: 100, y: 130, col: BLUE, frames: 40 }); }
+
+      if (pRelics.mummifiedHand && hand.length > 0) {
+        let ts = []; for (let i = 0; i < hand.length; i++) { if (Math.max(0, CARD_MASTER[hand[i]].cost - (handCostMods[i] || 0)) > 0) ts.push(i); }
+        if (ts.length > 0) { let t = ts[Math.floor(Math.random() * ts.length)]; handCostMods[t] = CARD_MASTER[hand[t]].cost; dmgPopups.push({ text: `MUMMY HAND: ${CARD_MASTER[hand[t]].name} COST 0`, x: 256, y: 220, col: YELLOW, frames: 45 }); }
+      }
+      dmgPopups.push({ text: `POWER ACTIVE!`, x: 100, y: 150, col: PURPLE, frames: 45 });
+    }
+  } else if (cData.type === "HEAL") {
+    if(!simulated) { sfxRare(); pHP = Math.min(pMaxHP, pHP + finalVal); dmgPopups.push({ text: `+${finalVal} HEAL`, x: 100, y: 160, col: GREEN, frames: 40 }); }
+  }
+
+  if (!simulated && cData.draw) {
+    if (cData.centerOnly) { if (playedCardIdx === Math.floor(playedHandLength / 2)) { drawCards(cData.draw); dmgPopups.push({ text: "CENTER CHARGE DRAW!", x: 256, y: 240, col: YELLOW, frames: 35 }); } }
+    else drawCards(cData.draw);
+  }
+}
+
+
+// --- combat.js ---
+function startPlayerTurn() {
+  if (pPoison > 0) {
+    pHP = Math.max(1, pHP - pPoison);
+    dmgPopups.push({ text: `POISON -${pPoison}`, x: 100, y: 140, col: GREEN, frames: 35 });
+    pPoison--;
+  }
+
+  let maxEnergyBonus = pMaxEnergy + (pRelics.greenGem ? 1 : 0) + (pRelics.voidStone ? 1 : 0) + nextTurnEnergyMod;
+  pEnergy = Math.max(0, maxEnergyBonus);
+  nextTurnEnergyMod = 0; 
+
+  if (ePhase2Triggered && eType === "dragon") {
+    if (ePhase2Gimmick === "flame_aura") {
+      pBlock = Math.floor(pBlock / 2);
+      if (pBlock > 0) dmgPopups.push({ text: "🔥FLAME AURA: BLOCK HALVED", x: 100, y: 100, col: RED, frames: 30 });
+    }
+  }
+
+  if (ePhase2Triggered && eType === "lich") {
+    pFrail++;
+    dmgPopups.push({ text: "💀 LICH DECAY: FRAIL +1", x: 100, y: 150, col: PURPLE, frames: 35 });
+  }
+
+  let goldScaleBlock = pRelics.goldenScale ? Math.floor(pGold * 0.05) : 0;
+  let wallBlock = getBaseEffect("defenseWall");
+  pBlock = (pRelics.blueGem ? 3 : 0) + nextTurnBlock + goldScaleBlock + wallBlock;
+  if (wallBlock > 0) {
+    dmgPopups.push({ text: `WALL BLOCK +${wallBlock}`, x: 100, y: 90, col: "#FFA500", frames: 30 });
+  }
+  if(pRelics.blueGem) {
+    dmgPopups.push({ text: "GEM SHIELD +3", x: 100, y: 120, col: CYAN, frames: 30 });
+  }
+  if (goldScaleBlock > 0) {
+    dmgPopups.push({ text: `GOLDEN SCALE +${goldScaleBlock}`, x: 100, y: 105, col: YELLOW, frames: 35 });
+  }
+  if (nextTurnBlock > 0) {
+    dmgPopups.push({ text: `DODGE BLOCK +${nextTurnBlock}`, x: 100, y: 135, col: CYAN, frames: 30 });
+    nextTurnBlock = 0;
+  }
+
+  turnAtkCount = 0;
+  turnDefCount = 0;
+  isFirstAtkInTurn = true;
+  pReflect = 0; 
+
+  gameState = "BATTLE";
+  decideEnemyIntent();
+  
+  hand = [];
+  handCostMods = [];
+  if (isFirstTurnOfCombat) {
+    isFirstTurnOfCombat = false;
+    for (let i = deck.length - 1; i >= 0; i--) {
+      let cKey = deck[i];
+      if (CARD_MASTER[cKey] && CARD_MASTER[cKey].innate) {
+        hand.push(cKey);
+        handCostMods.push(0);
+        deck.splice(i, 1);
+        if (hand.length >= 10) break;
+      }
+    }
+    if (hand.length < 5) {
+      drawCards(5 - hand.length);
+    }
+  } else {
+    drawCards(5);
+  }
+
+  if(activeInfiniteBladesCount > 0) {
+    for(let k=0; k<activeInfiniteBladesCount; k++) {
+      if(hand.length < 10) {
+        hand.push("shiv");
+        handCostMods.push(0);
+        dmgPopups.push({ text: "SHIV GENERATED", x: 256, y: 300, col: WHITE, frames: 25 });
+      }
+    }
+  }
+}
+function triggerEnemyDeathAnim() {
+  gameState = "DEATH_ANIM";
+  enemyDeathFrame = 24; 
+  sfxDeath();
+  
+  for (let i = 0; i < 8; i++) {
+    dmgPopups.push({
+      text: "⚙️",
+      x: 350 + (gameRandom() - 0.5) * 60,
+      y: 160 + (gameRandom() - 0.5) * 60,
+      col: "#FFA500",
+      frames: 30 + Math.floor(gameRandom() * 20)
+    });
+  }
+}
+function handleEnemyDeathFinal() {
+  pExp += eExpReward;
+  pGold += 18 + Math.floor(gameRandom() * 15);
+  
+  let matBase = currentFloor >= 5 ? 12 : 4;
+  let matRange = currentFloor >= 5 ? 7 : 5;
+  let matGain = matBase + Math.floor(gameRandom() * matRange);
+  if (pClass === "MERCHANT" && baseBuildings.tradingPost > 0) matGain += 2;
+  pMaterial += matGain;
+  totalMaterialGained += matGain;
+  dmgPopups.push({ text: `MATERIAL +${matGain}`, x: 256, y: 180, col: "#FFA500", frames: 45 });
+  
+  if (activeForgeProject) {
+    activeForgeProject.remainingTurns--;
+    if (activeForgeProject.remainingTurns <= 0) {
+      let rData = RECIPE_MASTER[activeForgeProject.recipeKey];
+      masterDeck.push(rData.result);
+      totalSynthesisCount++;
+      dmgPopups.push({ text: `⚒️ FORGE COMPLETED: ${CARD_MASTER[rData.result].name}`, x: 256, y: 150, col: "#FFD700", frames: 60 });
+      activeForgeProject = null;
+    } else {
+      dmgPopups.push({ text: `⚒️ FORGE PROGRESS: ${activeForgeProject.remainingTurns} turns left`, x: 256, y: 150, col: "#FFA500", frames: 45 });
+    }
+  }
+
+  if (pRelics.burningBlood) {
+    pHP = Math.min(pMaxHP, pHP + 6);
+    dmgPopups.push({ text: "BURNING BLOOD +6 HP", x: 100, y: 160, col: GREEN, frames: 40 });
+  }
+  
+  if (currentFloor === 3) {
+    let unowned = Object.keys(RELIC_MASTER).filter(k => !pRelics[k]);
+    if (unowned.length > 0) {
+      let rRelic = unowned[Math.floor(gameRandom() * unowned.length)];
+      pRelics[rRelic] = true;
+      dmgPopups.push({ text: `ELITE REWARD: ${RELIC_MASTER[rRelic].name}`, x: 256, y: 150, col: YELLOW, frames: 50 });
+    }
+  }
+
+  let nextLvExp = pLv * 25;
+  if (pExp >= nextLvExp) {
+    pExp -= nextLvExp; pLv++; sfxLvUp(); gameState = "LEVELUP";
+  } else {
+    generateRewardOptions();
+  }
+}
+function loop() {
+  fc++; if (enemyShakeFrame > 0) enemyShakeFrame--;
+  if (gameState === "DEATH_ANIM") { enemyDeathFrame--; if (enemyDeathFrame <= 0) handleEnemyDeathFinal(); }
+  cx.save(); cx.scale(1.5, 1.5); drawUI(); drawCRT(); cx.restore();
+  requestAnimationFrame(loop);
+}
+
+
+// --- base.js ---
+function proceedFromBase() {
+  generateMapOptions();
+  gameState = "MAP_SELECT";
+}
+function calculatePredictedDamage(cData, idx = -1, handLen = 0) {
+  let baseDmg = cData.value;
+  let armoryBonus = (cData.type === "ATK") ? getBaseEffect("armory") : 0;
+  let playerFinalPowerBonus = pPower + (pRelics.redGem ? 2 : 0) + (pRelics.loopCrown ? 3 : 0) + armoryBonus;
+  
+  baseDmg += activeAccuracyBonus;
+  
+  if (cData.isShieldBash) baseDmg = Math.floor(pBlock * (cData.valueFactor || 0.7));
+  else if (cData.isExecute && eHP <= (eMaxHP / 2)) baseDmg = 20;
+  else if (cData.isFortress) baseDmg = cData.value + Math.floor(pBlock * 0.5) + activeAccuracyBonus;
+  else if (cData.isToxicDmg) baseDmg = cData.value + (ePoison * 3) + activeAccuracyBonus;
+  else if (cData.isBarrierBlast) baseDmg = cData.value + pBlock + activeAccuracyBonus;
+  else if (cData.isBodySlam) baseDmg = pBlock;
+  else if (cData.isShieldSlam) baseDmg = pBlock * (cData.factor || 2);
+  else if (cData.strengthSynergy) baseDmg = cData.value + playerFinalPowerBonus + activeAccuracyBonus;
+  else if (cData.risky || cData.isOffering) baseDmg = 12 + activeAccuracyBonus;
+  else if (cData.goldSlam) baseDmg = Math.floor(pGold * 0.2);
+  else if (cData.leftBlast) {
+    let actIdx = (idx !== -1) ? idx : playedCardIdx;
+    baseDmg = (actIdx === 0) ? 16 : 6;
+  }
+
+  let finalVal = baseDmg;
+  if (pWeak > 0) finalVal = Math.floor(finalVal * 0.5);
+  finalVal += playerFinalPowerBonus;
+  if (eVuln > 0) finalVal = Math.floor(finalVal * 1.5);
+  
+  return finalVal;
+}
+function drawBaseViewUI() {
+  cx.fillStyle = BG; cx.fillRect(0, 0, W, H);
+  
+  cx.fillStyle = "#151525"; cx.fillRect(0, 0, W, 50);
+  cx.strokeStyle = WHITE; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(0, 50); cx.lineTo(W, 50); cx.stroke();
+  
+  px("⚒️ BASE CAMP (地下シェルター断面図) ⚒️", 20, 22, "#FFA500", 12, false);
+  px(`資材: ${pMaterial}M`, 310, 22, "#FFA500", 11, false);
+  px(`金貨: ${pGold}G  |  階層: ${currentFloor}/5`, 310, 38, YELLOW, 8, false);
+
+  let startY = 56;
+  let blockH = 44;
+  let gapY = 4;
+  let shelterW = 480;
+  let shelterX = (W - shelterW) / 2;
+
+  for (let i = 0; i < BASE_KEYS_ORDER.length; i++) {
+    let key = BASE_KEYS_ORDER[i];
+    let data = BASE_MASTER[key];
+    let lv = baseBuildings[key] || 0;
+    let y = startY + i * (blockH + gapY);
+
+    let isMaxed = lv >= data.maxLv;
+    let cost = getBaseBuildCost(key);
+    let canAfford = pMaterial >= cost && !isMaxed;
+    let isRoomHover = (mx >= shelterX && mx <= shelterX + shelterW && my >= y && my <= y + blockH);
+
+    cx.fillStyle = lv > 0 ? data.bgCol : "#0d0d12";
+    cx.fillRect(shelterX, y, shelterW, blockH);
+
+    let isClassBonus = (pClass === "WARRIOR" && key === "armory") ||
+                       (pClass === "MAGE" && key === "arcaneTower") ||
+                       (pClass === "MERCHANT" && key === "tradingPost");
+
+    cx.strokeStyle = isClassBonus ? "#FFD700" : (isRoomHover && canAfford ? YELLOW : (lv > 0 ? WHITE : "#222233"));
+    cx.lineWidth = isClassBonus ? 2 : 1;
+    cx.strokeRect(shelterX, y, shelterW, blockH);
+
+    cx.fillStyle = "#222"; cx.fillRect(shelterX + 2, y + 2, 14, blockH - 4);
+    cx.strokeStyle = GRAY; cx.strokeRect(shelterX + 2, y + 2, 14, blockH - 4);
+    px("↕", shelterX + 9, y + blockH/2 + 3, GRAY, 7, true);
+
+    let nameCol = lv > 0 ? WHITE : GRAY;
+    px(`${data.emoji} ${data.name}`, shelterX + 24, y + 16, nameCol, 9, false);
+    px(`Lv.${lv}/${data.maxLv}`, shelterX + 160, y + 16, lv > 0 ? CYAN : GRAY, 8, false);
+
+    let effect = getBaseEffect(key);
+    let descStr = lv > 0 ? data.desc.replace("{v}", effect) : "未建設 (機能停止中)";
+    px(descStr, shelterX + 24, y + 32, lv > 0 ? '#aaf' : '#555', 7, false);
+
+    if (isClassBonus && lv > 0) {
+      px("★CLASS BONUS", shelterX + 230, y + 16, "#FFD700", 6, false);
+    }
+
+    if (!isMaxed) {
+      let btnW = 85, btnH = 22;
+      let btnX = shelterX + shelterW - btnW - 8;
+      let btnY = y + (blockH - btnH) / 2;
+      let isBtnHover = (mx >= btnX && mx <= btnX + btnW && my >= btnY && my <= btnY + btnH);
+
+      cx.fillStyle = canAfford ? (isBtnHover ? '#555' : '#333') : '#1a1a1a';
+      cx.fillRect(btnX, btnY, btnW, btnH);
+      cx.strokeStyle = canAfford ? (isBtnHover ? YELLOW : WHITE) : '#444';
+      cx.strokeRect(btnX, btnY, btnW, btnH);
+
+      let btnText = lv === 0 ? `B: ${cost}M` : `UP: ${cost}M`;
+      px(btnText, btnX + btnW/2, btnY + 14, canAfford ? YELLOW : '#666', 8, true);
+    } else {
+      px("⚡ MAXED OUT", shelterX + shelterW - 75, y + blockH/2 + 4, GREEN, 8, false);
+    }
+  }
+
+  let showForge = baseBuildings.armory >= 3;
+  let procY = H - 42; 
+  let procX = showForge ? W/2 - 130 : W/2 - 60, procW = 120, procH = 28;
+  
+  let isOverProc = (mx >= procX && mx <= procX + procW && my >= procY && my <= procY + procH);
+  cx.fillStyle = isOverProc ? '#333' : '#1a1a2e'; cx.fillRect(procX, procY, procW, procH);
+  cx.strokeStyle = isOverProc ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(procX, procY, procW, procH);
+  px("▶ PROCEED", procX + procW/2, procY + 18, isOverProc ? YELLOW : WHITE, 11, true);
+
+  if (showForge) {
+    let forgeX = W/2 + 10, forgeW = 120, forgeH = 28;
+    let isOverForge = (mx >= forgeX && mx <= forgeX + forgeW && my >= procY && my <= procY + forgeH);
+    cx.fillStyle = isOverForge ? '#402222' : '#2e1a1a'; cx.fillRect(forgeX, procY, forgeW, forgeH);
+    cx.strokeStyle = isOverForge ? YELLOW : RED; cx.lineWidth = 2; cx.strokeRect(forgeX, procY, forgeW, forgeH);
+    px("🔨 FORGE (合成)", forgeX + forgeW/2, procY + 18, isOverForge ? YELLOW : RED, 11, true);
+  }
+}
+function drawForgeViewUI() {
+  cx.fillStyle = BG; cx.fillRect(0, 0, W, H);
+  px("⚒️ CARD SYNTHESIS (カード合成) ⚒️", W/2, 25, "#FFD700", 15, true);
+  px("2枚のカードを消費して、強力なカードを合成します", W/2, 42, "#aaa", 8, true);
+
+  if (activeForgeProject) {
+    cx.fillStyle = "#221414"; cx.strokeStyle = RED; cx.lineWidth = 1;
+    cx.fillRect(40, 52, W - 80, 42); cx.strokeRect(40, 52, W - 80, 42);
+    let rData = RECIPE_MASTER[activeForgeProject.recipeKey];
+    px(`合成中: ${rData.name} (${CARD_MASTER[rData.result].name})`, W/2, 68, YELLOW, 10, true);
+    px(`完成まであと ${activeForgeProject.remainingTurns} 回の戦闘勝利が必要`, W/2, 84, WHITE, 8, true);
+  } else {
+    px("進行中の合成プロジェクトはありません", W/2, 75, GRAY, 9, true);
+  }
+
+  const rKeys = Object.keys(RECIPE_MASTER);
+  let startY = 110;
+  for (let i = 0; i < rKeys.length; i++) {
+    let key = rKeys[i];
+    let data = RECIPE_MASTER[key];
+    let y = startY + i * 40;
+
+    let hasIngredients = true;
+    let deckCopy = [...masterDeck];
+    for (let ing of data.ingredients) {
+      let idx = deckCopy.indexOf(ing);
+      if (idx === -1) { hasIngredients = false; break; }
+      else { deckCopy.splice(idx, 1); }
+    }
+
+    let isHover = (mx >= 40 && mx <= W - 40 && my >= y && my <= y + 34);
+    let canStart = hasIngredients && !activeForgeProject;
+
+    cx.fillStyle = isHover && canStart ? '#2e2515' : '#141414';
+    cx.strokeStyle = canStart ? (isHover ? YELLOW : "#FFD700") : '#333';
+    cx.lineWidth = 1;
+    cx.fillRect(40, y, W - 80, 34);
+    cx.strokeRect(40, y, W - 80, 34);
+
+    let ingNames = data.ingredients.map(k => CARD_MASTER[k].name).join(" + ");
+    let resName = CARD_MASTER[data.result].name;
+    px(data.name, 50, y + 13, canStart ? "#FFD700" : GRAY, 9, false);
+    px(`${ingNames} ➔ ${resName} (${data.turns} 階戦闘)`, 50, y + 25, canStart ? WHITE : '#777', 8, false);
+
+    if (!activeForgeProject) {
+      if (hasIngredients) {
+        cx.fillStyle = isHover ? '#555' : '#333'; cx.fillRect(W - 130, y + 7, 80, 20);
+        cx.strokeStyle = YELLOW; cx.strokeRect(W - 130, y + 7, 80, 20);
+        px("START", W - 90, y + 21, YELLOW, 8, true);
+      } else {
+        px("LACK MATS", W - 90, y + 21, RED, 8, true);
+      }
+    }
+  }
+
+  let closeY = H - 40, closeW = 140, closeH = 30, closeX = W/2 - closeW/2;
+  let isOverClose = (mx >= closeX && mx <= closeX + closeW && my >= closeY && my <= closeY + closeH);
+  cx.fillStyle = isOverClose ? '#444' : '#222'; cx.fillRect(closeX, closeY, closeW, closeH);
+  cx.strokeStyle = isOverClose ? YELLOW : WHITE; cx.lineWidth = 1; cx.strokeRect(closeX, closeY, closeW, closeH);
+  px("BACK TO BASE", W/2, closeY + 19, isOverClose ? YELLOW : WHITE, 11, true);
+}
+
+
+// --- render.js ---
+function px(t, x, y, col, sz, center) {
+  cx.fillStyle = col; 
+  let finalSz = Math.round(sz * 1.15);
+  cx.font = `bold ${finalSz}px monospace`;
+  cx.letterSpacing = sz < 10 ? "0.2px" : "1.5px";
+  if (center) { const w = cx.measureText(t).width; cx.fillText(t, x - w / 2, y); }
+  else { cx.fillText(t, x, y); }
+}
 function drawClassSelectUI() {
   px("SELECT YOUR CHARACTER CLASS", W/2, 60, YELLOW, 18, true);
   px("冒険を始めるキャラクターを選択してください", W/2, 90, WHITE, 11, true);
 
   const boxW = 112, boxH = 210;
   
-  // Warrior (戦士)
   let wX = 12, wY = 130;
   let isWOver = (mx >= wX && mx <= wX + boxW && my >= wY && my <= wY + boxH);
   cx.fillStyle = isWOver ? '#1f1c2c' : '#111018'; cx.fillRect(wX, wY, boxW, boxH);
   cx.strokeStyle = isWOver ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(wX, wY, boxW, boxH);
-  
   px("WARRIOR", wX + boxW/2, wY + 35, RED, 14, true);
   px("戦士", wX + boxW/2, wY + 55, WHITE, 10, true);
   px("HP:50/NRG:3", wX + boxW/2, wY + 85, YELLOW, 10, true);
@@ -1000,12 +1817,10 @@ function drawClassSelectUI() {
   px("・大打撃BASH所持", wX + boxW/2, wY + 133, '#bbb', 8, true);
   px("・パワー型", wX + boxW/2, wY + 151, '#bbb', 8, true);
   
-  // Silent (暗殺者)
   let sX = 134, sY = 130;
   let isSOver = (mx >= sX && mx <= sX + boxW && my >= sY && my <= sY + boxH);
   cx.fillStyle = isSOver ? '#1f1c2c' : '#111018'; cx.fillRect(sX, sY, boxW, boxH);
   cx.strokeStyle = isSOver ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(sX, sY, boxW, boxH);
-  
   px("SILENT", sX + boxW/2, sY + 35, GREEN, 14, true);
   px("暗殺者", sX + boxW/2, sY + 55, WHITE, 10, true);
   px("HP:40/NRG:3", sX + boxW/2, sY + 85, YELLOW, 10, true);
@@ -1013,12 +1828,10 @@ function drawClassSelectUI() {
   px("・毒短剣P-DAGGER", sX + boxW/2, sY + 133, '#bbb', 8, true);
   px("・コンボ型", sX + boxW/2, sY + 151, '#bbb', 8, true);
 
-  // Mage (魔法使い)
   let mX = 256, mY = 130;
   let isMOver = (mx >= mX && mx <= mX + boxW && my >= mY && my <= mY + boxH);
   cx.fillStyle = isMOver ? '#1f1c2c' : '#111018'; cx.fillRect(mX, mY, boxW, boxH);
   cx.strokeStyle = isMOver ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(mX, mY, boxW, boxH);
-  
   px("MAGE", mX + boxW/2, mY + 35, CYAN, 14, true);
   px("魔法使い", mX + boxW/2, mY + 55, WHITE, 10, true);
   px("HP:35/NRG:3", mX + boxW/2, mY + 85, YELLOW, 10, true);
@@ -1026,21 +1839,24 @@ function drawClassSelectUI() {
   px("・0コストZAP所持", mX + boxW/2, mY + 133, '#bbb', 8, true);
   px("・デバフ操作型", mX + boxW/2, mY + 151, '#bbb', 8, true);
 
-  // Merchant (大商人)
   let mrX = 378, mrY = 130;
-  let isMrOver = (mx >= mrX && mx <= mrX + boxW && my >= mrY && my <= mrX + boxH); // Note: rect check
-  isMrOver = (mx >= mrX && mx <= mrX + boxW && my >= mrY && my <= mrY + boxH);
+  let isMrOver = (mx >= mrX && mx <= mrX + boxW && my >= mrY && my <= mrY + boxH);
   cx.fillStyle = isMrOver ? '#1f1c2c' : '#111018'; cx.fillRect(mrX, mrY, boxW, boxH);
   cx.strokeStyle = isMrOver ? YELLOW : WHITE; cx.lineWidth = 2; cx.strokeRect(mrX, mrY, boxW, boxH);
-  
   px("MERCHANT", mrX + boxW/2, mrY + 35, YELLOW, 14, true);
   px("大商人", mrX + boxW/2, mrY + 55, WHITE, 10, true);
   px("HP:45/NRG:3", mrX + boxW/2, mrY + 85, YELLOW, 10, true);
   px("・ゴールドを火力に", mrX + boxW/2, mrY + 115, '#bbb', 8, true);
   px("・お小遣いPAYDAY", mrX + boxW/2, mrY + 133, '#bbb', 8, true);
   px("・富豪の金袋所持", mrX + boxW/2, mrY + 151, '#bbb', 8, true);
-}
 
+  let sBtnX = W/2 - 100, sBtnY = 370, sBtnW = 200, sBtnH = 45;
+  let isSeedOver = (mx >= sBtnX && mx <= sBtnX + sBtnW && my >= sBtnY && my <= sBtnY + sBtnH);
+  cx.fillStyle = isSeedOver ? '#2a263c' : '#171424'; cx.fillRect(sBtnX, sBtnY, sBtnW, sBtnH);
+  cx.strokeStyle = isSeedOver ? YELLOW : WHITE; cx.lineWidth = 1; cx.strokeRect(sBtnX, sBtnY, sBtnW, sBtnH);
+  px(`SEED: ${gameSeed}`, W/2, sBtnY + 18, YELLOW, 10, true);
+  px("CLICK TO CHANGE SEED", W/2, sBtnY + 34, '#aaa', 8, true);
+}
 function drawMapSelectUI() {
   cx.fillStyle = BG; cx.fillRect(0, 0, W, H);
   px("CHOOSE NEXT PATH", W/2, 60, YELLOW, 18, true);
@@ -1060,7 +1876,6 @@ function drawMapSelectUI() {
     px(`FLOOR ${currentFloor + 1}`, bX + boxW/2, bY + 80, GRAY, 9, true);
   }
 }
-
 function drawCampfireUI() {
   cx.fillStyle = BG; cx.fillRect(0, 0, W, H);
   px("🔥 CAMPFIRE 🔥", W/2, 60, YELLOW, 20, true);
@@ -1080,7 +1895,6 @@ function drawCampfireUI() {
   px("SMITH (鍛冶)", 286 + boxW/2, bY + 35, RED, 14, true);
   px("ランダムカード1枚強化", 286 + boxW/2, bY + 65, WHITE, 9, true);
 }
-
 function drawSmithBranchUI() {
   cx.fillStyle = BG; cx.fillRect(0, 0, W, H);
   px("CHOOSE UPGRADE DIRECTION", W/2, 60, YELLOW, 18, true);
@@ -1121,27 +1935,43 @@ function drawSmithBranchUI() {
     px("UNAVAILABLE", 286 + boxW/2, bY + 65, GRAY, 8, true);
   }
 }
-
+function drawDeckViewUI() {
+  cx.fillStyle = 'rgba(5, 5, 15, 0.96)'; cx.fillRect(0, 0, W, H);
+  let viewList = deckViewSource === "DECK" ? deck : discard;
+  let title = deckViewSource === "DECK" ? "DRAW PILE (山札の一覧)" : "DISCARD PILE (捨て札の一覧)";
+  px(title, W/2, 40, YELLOW, 14, true);
+  px("CLICK ANYWHERE TO CLOSE (クリックで閉じる)", W/2, 60, GRAY, 8, true);
+  
+  let startX = 46, startY = 85;
+  for (let i = 0; i < viewList.length; i++) {
+    let cardKey = viewList[i];
+    let rX = startX + (i % 5) * 84;
+    let rY = startY + Math.floor(i / 5) * 45;
+    if (rY + 40 > H) { px("... AND MORE CARDS ...", W/2, H - 20, GRAY, 8, true); break; }
+    
+    let isHover = (mx >= rX && mx <= rX + 76 && my >= rY && my <= rY + 38);
+    let cData = CARD_MASTER[cardKey];
+    if (!cData) continue;
+    
+    cx.fillStyle = isHover ? '#222240' : '#141424'; cx.fillRect(rX, rY, 76, 38);
+    cx.strokeStyle = isHover ? YELLOW : (cData.rare === "RARE" ? PURPLE : WHITE);
+    cx.strokeRect(rX, rY, 76, 38);
+    px(cData.name, rX + 38, rY + 16, cData.rare === "RARE" ? PURPLE : WHITE, cData.name.length > 8 ? 6 : 9, true);
+    px(`[${cData.type}] ${cData.cost}`, rX + 38, rY + 28, GRAY, 7, true);
+    if (isHover) activeTooltip = { name: cData.name, desc: cData.desc };
+  }
+}
 function drawUI() {
   cx.fillStyle = BG; cx.fillRect(0, 0, W, H);
-  activeTooltip = null; // 毎フレーム初期化
+  activeTooltip = null; 
 
-  if (gameState === "CLASS_SELECT") {
-    drawClassSelectUI();
-    return;
-  }
-  if (gameState === "MAP_SELECT") {
-    drawMapSelectUI();
-    return;
-  }
-  if (gameState === "CAMPFIRE") {
-    drawCampfireUI();
-    return;
-  }
-  if (gameState === "SMITH_BRANCH") {
-    drawSmithBranchUI();
-    return;
-  }
+  if (gameState === "CLASS_SELECT") { drawClassSelectUI(); return; }
+  if (gameState === "MAP_SELECT") { drawMapSelectUI(); return; }
+  if (gameState === "CAMPFIRE") { drawCampfireUI(); return; }
+  if (gameState === "SMITH_BRANCH") { drawSmithBranchUI(); return; }
+  if (gameState === "DECK_VIEW") { drawDeckViewUI(); return; }
+  if (gameState === "BASE_VIEW") { drawBaseViewUI(); return; }
+  if (gameState === "FORGE_VIEW") { drawForgeViewUI(); return; }
 
   let loopStr = currentLoop > 1 ? ` (LOOP ${currentLoop})` : "";
   px(`FLOOR ${currentFloor}/5${loopStr}`, 20, 25, WHITE, 12, false);
@@ -1162,9 +1992,7 @@ function drawUI() {
   let finalPowerDisplay = pPower + (pRelics.redGem ? 2 : 0);
   if(finalPowerDisplay > 0) {
     px(`ATK+${finalPowerDisplay}`, 420, 25, RED, 11, false);
-    if (mx >= 420 && mx <= 480 && my >= 10 && my <= 28) {
-      activeTooltip = STATUS_DESCS["POWER"];
-    }
+    if (mx >= 420 && mx <= 480 && my >= 10 && my <= 28) activeTooltip = STATUS_DESCS["POWER"];
   }
 
   let rxOffset = 20;
@@ -1213,80 +2041,54 @@ function drawUI() {
     if (mx >= rxOffset && mx <= rxOffset + 45 && my >= 32 && my <= 46) activeTooltip = STATUS_DESCS["mummifiedHand"];
   }
   if (pRelics.goldBag) { 
-    rxOffset += 48;
-    px("💎[GBAG]", rxOffset, 42, YELLOW, 9, false); 
+    rxOffset += 48; px("💎[GBAG]", rxOffset, 42, YELLOW, 9, false); 
     if (mx >= rxOffset && mx <= rxOffset + 45 && my >= 32 && my <= 46) activeTooltip = STATUS_DESCS["goldBag"];
   }
   if (pRelics.loopCrown) {
-    rxOffset += 48;
-    px("💎[CROWN]", rxOffset, 42, YELLOW, 9, false);
+    rxOffset += 48; px("💎[CROWN]", rxOffset, 42, YELLOW, 9, false);
     if (mx >= rxOffset && mx <= rxOffset + 45 && my >= 32 && my <= 46) activeTooltip = STATUS_DESCS["loopCrown"];
   }
   if (pRelics.voidStone) {
-    rxOffset += 48;
-    px("💎[VSTON]", rxOffset, 42, PURPLE, 9, false);
+    rxOffset += 48; px("💎[VSTON]", rxOffset, 42, PURPLE, 9, false);
     if (mx >= rxOffset && mx <= rxOffset + 45 && my >= 32 && my <= 46) activeTooltip = STATUS_DESCS["voidStone"];
   }
 
-  // ポーションスロットの描画
   let potY = 52;
   for (let i = 0; i < 2; i++) {
-    let potX = 20 + i * 28;
-    let pot = pPotions[i];
-    
+    let potX = 20 + i * 28; let pot = pPotions[i];
     cx.fillStyle = '#111018'; cx.fillRect(potX, potY, 22, 22);
     cx.strokeStyle = GRAY; cx.strokeRect(potX, potY, 22, 22);
-    
     if (pot) {
       let potColor = pot === "healP" ? GREEN : (pot === "poisP" ? PURPLE : CYAN);
-      cx.fillStyle = potColor;
-      cx.fillRect(potX + 4, potY + 6, 14, 12);
-      cx.fillStyle = WHITE;
-      cx.fillRect(potX + 9, potY + 2, 4, 4);
-      
-      // ホバーツールチップ
-      if (mx >= potX && mx <= potX + 22 && my >= potY && my <= potY + 22) {
-        activeTooltip = POTION_MASTER[pot];
-      }
+      cx.fillStyle = potColor; cx.fillRect(potX + 4, potY + 6, 14, 12);
+      cx.fillStyle = WHITE; cx.fillRect(potX + 9, potY + 2, 4, 4);
+      if (mx >= potX && mx <= potX + 22 && my >= potY && my <= potY + 22) activeTooltip = POTION_MASTER[pot];
     } else {
       px("empty", potX + 11, potY + 14, GRAY, 6, true);
     }
   }
 
-  // 手札枠背景（山札・エネルギー等が上に描画されるように先に描画）
   cx.fillStyle = "#0a0a0f"; cx.fillRect(10, 240, 492, 165);
   cx.strokeStyle = "#223"; cx.strokeRect(10, 240, 492, 165);
-
-  // 山札
 
   cx.fillStyle = '#223'; cx.fillRect(16, 245, 24, 30);
   cx.strokeStyle = GRAY; cx.strokeRect(16, 245, 24, 30);
   px(`DECK`, 28, 288, GRAY, 9, true); px(`${deck.length}`, 28, 264, WHITE, 11, true);
   if (mx >= 16 && mx <= 40 && my >= 245 && my <= 275) {
-    let deckCards = {};
-    deck.forEach(k => {
-      let name = CARD_MASTER[k].name;
-      deckCards[name] = (deckCards[name] || 0) + 1;
-    });
+    let deckCards = {}; deck.forEach(k => { let name = CARD_MASTER[k].name; deckCards[name] = (deckCards[name] || 0) + 1; });
     let desc = Object.keys(deckCards).map(name => `${name}x${deckCards[name]}`).join(", ");
     activeTooltip = { name: "DECK (山札の中身)", desc: desc || "空" };
   }
 
-  // 捨て札
   cx.fillStyle = '#223'; cx.fillRect(472, 245, 24, 30);
   cx.strokeStyle = GRAY; cx.strokeRect(472, 245, 24, 30);
   px(`DISC`, 484, 288, GRAY, 9, true); px(`${discard.length}`, 484, 264, WHITE, 11, true);
   if (mx >= 472 && mx <= 496 && my >= 245 && my <= 275) {
-    let discCards = {};
-    discard.forEach(k => {
-      let name = CARD_MASTER[k].name;
-      discCards[name] = (discCards[name] || 0) + 1;
-    });
+    let discCards = {}; discard.forEach(k => { let name = CARD_MASTER[k].name; discCards[name] = (discCards[name] || 0) + 1; });
     let desc = Object.keys(discCards).map(name => `${name}x${discCards[name]}`).join(", ");
     activeTooltip = { name: "DISCARD (捨て札の中身)", desc: desc || "空" };
   }
 
-  // プレイヤー
   cx.fillStyle = WHITE; cx.fillRect(85, 145, 32, 48); 
   px("YOU", 101, 135, WHITE, 11, true);
   cx.fillStyle = '#333'; cx.fillRect(50, 205, 100, 6);
@@ -1298,20 +2100,13 @@ function drawUI() {
   if (pVuln > 0) pStatusText.push(`脆弱:${pVuln}`);
   if (pFrail > 0) pStatusText.push(`衰弱:${pFrail}`);
   if (pReflect > 0) pStatusText.push(`反射:${pReflect}`);
-  if (pStatusText.length > 0) {
-    px(pStatusText.join(" "), 101, 235, GREEN, 9, true);
-  }
+  if (pStatusText.length > 0) px(pStatusText.join(" "), 101, 235, GREEN, 9, true);
   if(pBlock > 0) px(`🛡️${pBlock}`, 101, 122, CYAN, 11, true);
-  
   drawStatusIcons(101, 102, pPoison, pWeak, pVuln, 0, pFrail, true);
 
-  // 敵
   if (gameState === "BATTLE" || gameState === "ENEMY_TURN" || gameState === "DEATH_ANIM") {
     cx.save();
-    if(enemyShakeFrame > 0 && gameState !== "DEATH_ANIM") {
-      let offset = (Math.random() - 0.5) * 6;
-      cx.translate(offset, 0);
-    }
+    if(enemyShakeFrame > 0 && gameState !== "DEATH_ANIM") { let offset = (Math.random() - 0.5) * 6; cx.translate(offset, 0); }
     drawEnemySprite(eType, 385, 180);
     px(eName, 385, 135, RED, 11, true);
     cx.fillStyle = '#333'; cx.fillRect(335, 205, 100, 6);
@@ -1322,9 +2117,7 @@ function drawUI() {
     if (eWeak > 0) eStatusText.push(`脱力:${eWeak}`);
     if (eVuln > 0) eStatusText.push(`脆弱:${eVuln}`);
     if (eThorns > 0) eStatusText.push(`トゲ:${eThorns}`);
-    if (eStatusText.length > 0) {
-      px(eStatusText.join(" "), 385, 235, GREEN, 9, true);
-    }
+    if (eStatusText.length > 0) px(eStatusText.join(" "), 385, 235, GREEN, 9, true);
     if(eBlock > 0) px(`🛡️${eBlock}`, 385, 122, CYAN, 11, true);
     cx.restore();
 
@@ -1333,27 +2126,19 @@ function drawUI() {
     if (gameState !== "DEATH_ANIM") {
       cx.fillStyle = '#121225'; cx.fillRect(325, 45, 120, 42);
       cx.strokeStyle = GRAY; cx.strokeRect(325, 45, 120, 42);
-      
-      let finalEValue = eIntent.value;
-      let intentColor = WHITE;
-      
+      let finalEValue = eIntent.value; let intentColor = WHITE;
       if (eIntent.action === "ATTACK") {
         if (eWeak > 0) finalEValue = Math.floor(finalEValue * 0.5);
         if (pVuln > 0) finalEValue = Math.floor(finalEValue * 1.5);
-        
-        intentColor = RED;
-        if (eWeak > 0) intentColor = GREEN;
-        if (pVuln > 0) intentColor = '#ff6666';
+        intentColor = RED; if (eWeak > 0) intentColor = GREEN; if (pVuln > 0) intentColor = '#ff6666';
       } else if (eIntent.action === "DEFEND") {
         intentColor = CYAN;
       }
-      
       px(`${eIntent.type} ${eIntent.name}`, 385, 62, YELLOW, 10, true);
       px(`VALUE: ${finalEValue}`, 385, 78, intentColor, 10, true);
     }
   }
 
-  // エネルギー
   px("ENERGY", 40, 325, BLUE, 9, true);
   let activeMaxEnergy = pMaxEnergy + (pRelics.greenGem ? 1 : 0);
   for(let i=0; i<activeMaxEnergy; i++) {
@@ -1362,63 +2147,64 @@ function drawUI() {
     if(i < pEnergy) { cx.strokeStyle = CYAN; cx.strokeRect(18 + i*16, 302, 12, 12); }
   }
 
-  // ターン終了ボタン
   let isOverBtn = (mx >= 415 && mx <= 495 && my >= 298 && my <= 328);
   cx.fillStyle = gameState === "BATTLE" ? (isOverBtn ? '#444' : '#222') : '#111';
   cx.fillRect(415, 298, 80, 30);
   cx.strokeStyle = gameState === "BATTLE" ? WHITE : GRAY; cx.strokeRect(415, 298, 80, 30);
   px("TURN END", 455, 317, gameState === "BATTLE" ? WHITE : GRAY, 9, true);
 
-  // 手札
-  selectedIdx = -1; // 毎フレーム再評価
-
+  selectedIdx = -1; 
   for (let i = 0; i < hand.length; i++) {
-    const cardKey = hand[i];
-    const cData = CARD_MASTER[cardKey];
-    if(!cData) continue;
-    
-    let geom = getCardGeometry(hand.length, i);
-    let cyPos = geom.y;
+    const cardKey = hand[i]; const cData = CARD_MASTER[cardKey]; if(!cData) continue;
+    let geom = getCardGeometry(hand.length, i); let cyPos = geom.y;
+    let isSmall = geom.h < 100;
+    let liftY = isSmall ? 10 : 14;
 
-    // 純粋に現在のマウス座標がカードの描画領域内にあるかをチェック
-    let isHover = (mx >= geom.x && mx <= geom.x + geom.w && my >= geom.y - 14 && my <= geom.y + geom.h);
-    if (isHover && gameState === "BATTLE") { 
-      cyPos -= 14; 
-      selectedIdx = i; // 次のクリック用にインデックスを保持
-      activeTooltip = { name: cData.name, desc: cData.desc };
-    }
+    let isHover = (mx >= geom.x && mx <= geom.x + geom.w && my >= geom.y - liftY && my <= geom.y + geom.h);
+    if (isHover && gameState === "BATTLE") { cyPos -= liftY; selectedIdx = i; activeTooltip = { name: cData.name, desc: cData.desc }; }
 
     let isPlayable = true;
-    if (cData.centerOnly && i !== Math.floor(hand.length / 2)) {
-      isPlayable = false;
-    }
+    if (cData.centerOnly && i !== Math.floor(hand.length / 2)) isPlayable = false;
 
     let displayCost = Math.max(0, cData.cost - nextCardCostMod - (handCostMods[i] || 0));
     cx.fillStyle = '#121222'; cx.fillRect(geom.x, cyPos, geom.w, geom.h);
-    cx.strokeStyle = isHover && gameState === "BATTLE" && isPlayable ? YELLOW : (cData.rare === "RARE" ? PURPLE : ((pEnergy >= displayCost && isPlayable) ? WHITE : GRAY));
-    cx.lineWidth = cData.rare === "RARE" ? 2 : 1; cx.strokeRect(geom.x, cyPos, geom.w, geom.h);
+    let borderCol = isHover && gameState === "BATTLE" && isPlayable ? YELLOW : (cData.rare === "RARE" ? PURPLE : ((pEnergy >= displayCost && isPlayable) ? WHITE : GRAY));
+    let lineWidth = cData.rare === "RARE" ? 2 : 1;
+    if (cData.rare === "RARE" && isPlayable) {
+      let pulse = Math.sin(fc * 0.1) * 0.4 + 0.6; borderCol = `rgba(240, 208, 0, ${pulse})`; lineWidth = 2;
+    }
+    cx.strokeStyle = borderCol; cx.lineWidth = lineWidth; cx.strokeRect(geom.x, cyPos, geom.w, geom.h);
 
-    cx.fillStyle = isPlayable ? BLUE : GRAY; cx.beginPath(); cx.arc(geom.x+10, cyPos+10, 7, 0, Math.PI*2); cx.fill();
-    px(`${displayCost}`, geom.x+7, cyPos+13, WHITE, 9, false);
+    let badgeR = isSmall ? 5 : 7;
+    cx.fillStyle = isPlayable ? BLUE : GRAY; cx.beginPath(); cx.arc(geom.x + badgeR + 2, cyPos + badgeR + 2, badgeR, 0, Math.PI*2); cx.fill();
+    px(`${displayCost}`, geom.x + (isSmall ? 4 : 7), cyPos + (isSmall ? 9 : 13), WHITE, isSmall ? 7 : 9, false);
 
-    drawCardIcon(cData.type, geom.x + geom.w/2 - 4, cyPos + 50);
+    if (!isSmall) drawCardIcon(cData.type, geom.x + geom.w/2 - 4, cyPos + 50);
 
-    px(cData.name, geom.x + geom.w/2, cyPos + 26, isPlayable ? (cData.rare==="RARE"?PURPLE:WHITE) : GRAY, cData.name.length>9?6:9, true);
-    px(`[${cData.type}]`, geom.x + geom.w/2, cyPos + 40, isPlayable ? (cData.type==="ATK"?RED:CYAN) : GRAY, 8, true);
+    let nameSz = isSmall ? (cData.name.length > 7 ? 5 : 6) : (cData.name.length > 9 ? 6 : 9);
+    let nameY = isSmall ? cyPos + 22 : cyPos + 26;
+    px(cData.name, geom.x + geom.w/2, nameY, isPlayable ? (cData.rare==="RARE"?PURPLE:WHITE) : GRAY, nameSz, true);
     
-    let displayDesc = cData.desc;
-    let descColor = isPlayable ? '#aaa' : GRAY;
+    if (!isSmall) {
+      px(`[${cData.type}]`, geom.x + geom.w/2, cyPos + 40, isPlayable ? (cData.type==="ATK"?RED:CYAN) : GRAY, 8, true);
+    }
+
+    let displayDesc = cData.desc; let descColor = isPlayable ? '#aaa' : GRAY;
     if(cData.type === "ATK") {
-      let pred = calculatePredictedDamage(cData, i, hand.length);
-      displayDesc = `ENEMY -${pred} HP`;
-      if (isPlayable) {
-        descColor = (pred > (cData.value + activeAccuracyBonus)) ? YELLOW : ((pred < (cData.value + activeAccuracyBonus)) ? '#88cc88' : WHITE);
+      let pred = calculatePredictedDamage(cData, i, hand.length); displayDesc = `ENEMY -${pred} HP`;
+      if (isPlayable) descColor = (pred > (cData.value + activeAccuracyBonus)) ? YELLOW : ((pred < (cData.value + activeAccuracyBonus)) ? '#88cc88' : WHITE);
+    }
+    let descY = isSmall ? cyPos + geom.h - 10 : cyPos + 80;
+    let descSz = isSmall ? 5 : (cData.isShieldBash||cData.name.length>9 ? 6 : 7);
+    if (!isSmall || isHover) {
+      if (isSmall) {
+        px(`[${cData.type}]`, geom.x + geom.w/2, cyPos + 36, isPlayable ? (cData.type==="ATK"?RED:CYAN) : GRAY, 5, true);
+      } else {
+        px(displayDesc, geom.x + geom.w/2, descY, descColor, descSz, true);
       }
     }
-    px(displayDesc, geom.x + geom.w/2, cyPos + 80, descColor, cData.isShieldBash||cData.name.length>9?6:7, true);
   }
 
-  // 報酬画面
   if (gameState === "REWARD") {
     cx.fillStyle = 'rgba(5,5,15,0.92)'; cx.fillRect(0, 0, W, H);
     px("VICTORY!", W/2, 65, YELLOW, 22, true);
@@ -1429,22 +2215,23 @@ function drawUI() {
       let rx = 76 + i * 130; let rKey = rewardOptions[i]; let rData = CARD_MASTER[rKey];
       let isHover = (mx >= rx && mx <= rx + rwW && my >= rY && my <= rY + rwH);
       cx.fillStyle = isHover ? '#222240' : '#141424'; cx.fillRect(rx, rY, rwW, rwH);
-      cx.strokeStyle = isHover ? YELLOW : (rData.rare==="RARE"?PURPLE:WHITE);
-      cx.lineWidth = rData.rare==="RARE"?2:1; cx.strokeRect(rx, rY, rwW, rwH);
+      let rBorderCol = isHover ? YELLOW : (rData.rare === "RARE" ? PURPLE : WHITE);
+      let rLineWidth = rData.rare === "RARE" ? 2 : 1;
+      if (rData.rare === "RARE" && !isHover) {
+        let pulse = Math.sin(fc * 0.1) * 0.4 + 0.6; rBorderCol = `rgba(240, 208, 0, ${pulse})`; rLineWidth = 2;
+      }
+      cx.strokeStyle = rBorderCol; cx.lineWidth = rLineWidth; cx.strokeRect(rx, rY, rwW, rwH);
       px(`(${rData.cost})`, rx + 12, rY + 20, BLUE, 10, false);
       px(rData.name, rx + rwW/2, rY + 45, rData.rare==="RARE"?PURPLE:WHITE, rData.name.length>9?7:10, true);
       drawCardIcon(rData.type, rx + rwW/2 - 4, rY + 65);
       px(rData.desc, rx + rwW/2, rY + 105, '#bbb', 6, true);
-      if(rData.rare === "RARE") px("★RARE★", rx + rwW/2, rY + 130, PURPLE, 8, true);
     }
-
     let isHoverSkip = (mx >= 196 && mx <= 316 && my >= 315 && my <= 345);
     cx.fillStyle = isHoverSkip ? '#442222' : '#221111'; cx.fillRect(196, 315, 120, 30);
     cx.strokeStyle = RED; cx.strokeRect(196, 315, 120, 30);
     px("SKIP & REST (+15HP)", 256, 334, WHITE, 10, true); 
   }
 
-  // レベルアップ画面
   if (gameState === "LEVELUP") {
     cx.fillStyle = 'rgba(10,10,30,0.95)'; cx.fillRect(0, 0, W, H);
     px("LEVEL UP!", W/2, 100, YELLOW, 26, true);
@@ -1453,46 +2240,30 @@ function drawUI() {
     let isH1 = (mx >= 50 && mx <= 170 && my >= 200 && my <= 260);
     let isH2 = (mx >= 196 && mx <= 316 && my >= 200 && my <= 260);
     let isH3 = (mx >= 342 && mx <= 462 && my >= 200 && my <= 260);
-
     cx.fillStyle = isH1 ? '#224' : '#112'; cx.fillRect(50, 200, 120, 60);
-    cx.strokeStyle = WHITE; cx.strokeRect(50, 200, 120, 60);
-    px("+5 MAX HP", 110, 235, WHITE, 12, true);
-
+    cx.strokeStyle = WHITE; cx.strokeRect(50, 200, 120, 60); px("+5 MAX HP", 110, 235, WHITE, 12, true);
     cx.fillStyle = isH2 ? '#224' : '#112'; cx.fillRect(196, 200, 120, 60);
-    cx.strokeStyle = WHITE; cx.strokeRect(196, 200, 120, 60);
-    px("+1 ENERGY", 256, 235, WHITE, 12, true);
-
+    cx.strokeStyle = WHITE; cx.strokeRect(196, 200, 120, 60); px("+1 ENERGY", 256, 235, WHITE, 12, true);
     cx.fillStyle = isH3 ? '#224' : '#112'; cx.fillRect(342, 200, 120, 60);
-    cx.strokeStyle = WHITE; cx.strokeRect(342, 200, 120, 60);
-    px("UPGRADE CARD", 402, 235, WHITE, 11, true);
+    cx.strokeStyle = WHITE; cx.strokeRect(342, 200, 120, 60); px("UPGRADE CARD", 402, 235, WHITE, 11, true);
   }
 
-  // カードアップグレード画面
   if (gameState === "UPGRADE_SCREEN") {
     cx.fillStyle = 'rgba(10,10,25,0.96)'; cx.fillRect(0, 0, W, H);
     px("SELECT 1 CARD TO UPGRADE", W/2, 45, YELLOW, 14, true);
-    
     let startX = 46, startY = 90;
     for(let i=0; i<masterDeck.length; i++) {
-      let cardKey = masterDeck[i];
-      let isUpgradeable = CARD_MASTER[cardKey + "+"] !== undefined;
-      
-      let rX = startX + (i % 5) * 84;
-      let rY = startY + Math.floor(i / 5) * 50;
+      let cardKey = masterDeck[i]; let isUpgradeable = CARD_MASTER[cardKey + "+"] !== undefined || CARD_MASTER[cardKey + "-"] !== undefined;
+      let rX = startX + (i % 5) * 84; let rY = startY + Math.floor(i / 5) * 50;
       let isHover = (mx >= rX && mx <= rX + 76 && my >= rY && my <= rY + 40) && isUpgradeable;
-      
-      cx.fillStyle = isUpgradeable ? (isHover ? '#225' : '#141424') : '#111';
-      cx.fillRect(rX, rY, 76, 40);
-      cx.strokeStyle = isUpgradeable ? (isHover ? YELLOW : WHITE) : GRAY; 
-      cx.strokeRect(rX, rY, 76, 40);
-      
+      cx.fillStyle = isUpgradeable ? (isHover ? '#225' : '#141424') : '#111'; cx.fillRect(rX, rY, 76, 40);
+      cx.strokeStyle = isUpgradeable ? (isHover ? YELLOW : WHITE) : GRAY; cx.strokeRect(rX, rY, 76, 40);
       let cData = CARD_MASTER[cardKey];
       px(cData.name, rX + 38, rY + 20, isUpgradeable ? WHITE : GRAY, cData.name.length>8?6:9, true);
       px(isUpgradeable ? "UPGRADE" : "MAX", rX + 38, rY + 32, isUpgradeable ? GREEN : GRAY, 7, true);
     }
   }
 
-  // 商店
   if (gameState === "SHOP") {
     cx.fillStyle = 'rgba(20,15,10,0.94)'; cx.fillRect(0, 0, W, H);
     px("🏪 1987 BLACK-MARKET RPG MERCHANTS", W/2, 45, YELLOW, 16, true);
@@ -1500,127 +2271,118 @@ function drawUI() {
 
     const sW = 86, sH = 150, sY = 125, gap = 10;
     for(let i=0; i<shopInventory.length; i++) {
-      let item = shopInventory[i];
-      let sX = 18 + i * (sW + gap);
+      let item = shopInventory[i]; let sX = 18 + i * (sW + gap);
       let isHover = (mx >= sX && mx <= sX + sW && my >= sY && my <= sY + sH) && !item.bought;
-
-      cx.fillStyle = item.bought ? '#222' : (isHover ? '#332211' : '#17130e');
-      cx.fillRect(sX, sY, sW, sH);
-      cx.strokeStyle = item.bought ? GRAY : (isHover ? YELLOW : WHITE);
-      cx.strokeRect(sX, sY, sW, sH);
+      cx.fillStyle = item.bought ? '#222' : (isHover ? '#332211' : '#17130e'); cx.fillRect(sX, sY, sW, sH);
+      cx.strokeStyle = item.bought ? GRAY : (isHover ? YELLOW : WHITE); cx.strokeRect(sX, sY, sW, sH);
 
       if (!item.bought) {
         if (item.type === "REMOVE") {
-          px("REMOVE", sX + sW/2, sY + 30, RED, 11, true);
-          px("CARD", sX + sW/2, sY + 45, RED, 11, true);
-          px("PERMANENT", sX + sW/2, sY + 80, WHITE, 8, true);
-          px("DELETE", sX + sW/2, sY + 95, WHITE, 8, true);
+          px("REMOVE", sX + sW/2, sY + 30, RED, 11, true); px("CARD", sX + sW/2, sY + 45, RED, 11, true);
+          px("deck slim", sX + sW/2, sY + 75, '#aaa', 6, true);
+          if (isHover) activeTooltip = { name: "CARD REMOVE", desc: "デッキから任意のカードを1枚永久除外します。" };
         } else if (item.type === "POTION") {
-          px("POTION", sX + sW/2, sY + 35, GREEN, 11, true);
-          px("HEAL HP", sX + sW/2, sY + 75, WHITE, 8, true);
-          px("+20 VALUE", sX + sW/2, sY + 92, GREEN, 8, true);
+          px("POTION", sX + sW/2, sY + 35, GREEN, 11, true); px("HEAL HP", sX + sW/2, sY + 75, WHITE, 8, true);
+          if (isHover) activeTooltip = { name: "HP POTION", desc: "戦闘中に使用: HP +15 回復します。" };
         } else if (item.type === "RELIC") {
           let rData = RELIC_MASTER[item.relicKey];
-          px("★RELIC★", sX + sW/2, sY + 25, YELLOW, 9, true);
-          px(rData.name, sX + sW/2, sY + 45, CYAN, 8, true);
-          px(rData.desc.split(" ")[0], sX + sW/2, sY + 80, '#ccc', 7, true);
-          px(rData.desc.split(" ").slice(1).join(" "), sX + sW/2, sY + 92, '#ccc', 7, true);
+          px("★RELIC★", sX + sW/2, sY + 25, YELLOW, 9, true); px(rData.name, sX + sW/2, sY + 45, CYAN, 8, true);
+          if (isHover) activeTooltip = { name: rData.name, desc: rData.desc };
         } else if (item.type === "CARD") {
           let cData = CARD_MASTER[item.cardKey];
-          px(cData.name, sX + sW/2, sY + 35, cData.rare==="RARE"?PURPLE:WHITE, cData.name.length>8?6:9, true);
-          px(`[${cData.type}]`, sX + sW/2, sY + 55, cData.type==="ATK"?RED:CYAN, 8, true);
-          px(cData.desc, sX + sW/2, sY + 90, '#aaa', 6, true);
+          px(cData.name, sX + sW/2, sY + 28, cData.rare==="RARE"?PURPLE:WHITE, cData.name.length>8?6:9, true);
+          px(`[${cData.type}] ${cData.cost}MP`, sX + sW/2, sY + 44, cData.type==="ATK"?RED:CYAN, 7, true);
+          let descWords = cData.desc; 
+          if (descWords.length <= 14) {
+            px(descWords, sX + sW/2, sY + 78, '#aaa', 6, true);
+          } else {
+            px(descWords.substring(0, 14), sX + sW/2, sY + 72, '#aaa', 6, true);
+            px(descWords.substring(14), sX + sW/2, sY + 83, '#aaa', 6, true);
+          }
+          if (isHover) activeTooltip = { name: cData.name, desc: `[${cData.type}] Cost:${cData.cost} | ${cData.desc}` };
         }
         px(`${item.cost}G`, sX + sW/2, sY + 132, YELLOW, 11, true);
       } else {
         px("SOLD OUT", sX + sW/2, sY + 75, GRAY, 11, true);
       }
     }
-
     let isLeaveHover = (mx >= 206 && mx <= 306 && my >= 330 && my <= 360);
     cx.fillStyle = isLeaveHover ? '#444' : '#222'; cx.fillRect(206, 330, 100, 30);
-    cx.strokeStyle = WHITE; cx.strokeRect(206, 330, 100, 30);
-    px("LEAVE SHOP", 256, 349, WHITE, 11, true);
+    cx.strokeStyle = WHITE; cx.strokeRect(206, 330, 100, 30); px("LEAVE SHOP", 256, 349, WHITE, 11, true);
   }
 
   if (gameState === "SHOP_REMOVE") {
     cx.fillStyle = 'rgba(10,0,0,0.95)'; cx.fillRect(0, 0, W, H);
     px("SELECT 1 CARD TO DISCARD FOREVER", W/2, 45, RED, 14, true);
-    
     let startX = 46, startY = 90;
     for(let i=0; i<masterDeck.length; i++) {
-      let rX = startX + (i % 5) * 84;
-      let rY = startY + Math.floor(i / 5) * 50;
+      let rX = startX + (i % 5) * 84; let rY = startY + Math.floor(i / 5) * 50;
       let isHover = (mx >= rX && mx <= rX + 76 && my >= rY && my <= rY + 40);
       cx.fillStyle = isHover ? '#400' : '#1c1c1c'; cx.fillRect(rX, rY, 76, 40);
       cx.strokeStyle = isHover ? YELLOW : GRAY; cx.strokeRect(rX, rY, 76, 40);
-      
       let cData = CARD_MASTER[masterDeck[i]];
       px(cData.name, rX + 38, rY + 20, cData.rare==="RARE"?PURPLE:WHITE, cData.name.length>8?6:9, true);
-      px(`[${cData.type}]`, rX + 38, rY + 32, GRAY, 7, true);
     }
   }
 
   if (gameState === "GAMEOVER") {
-    cx.fillStyle = 'rgba(0,0,0,0.85)'; cx.fillRect(0, 0, W, H);
-    px("YOU DIED", W/2, H/2 - 30, RED, 26, true);
-    px(`REACHED: FLOOR ${currentFloor} (LOOP ${currentLoop})`, W/2, H/2 + 5, WHITE, 11, true);
-    px(`MAX LOOP RECORD: ${maxLoopReached}`, W/2, H/2 + 25, YELLOW, 11, true);
-    px("CLICK TO RESTART", W/2, H/2 + 65, GRAY, 11, true);
+    cx.fillStyle = 'rgba(0,0,0,0.88)'; cx.fillRect(0, 0, W, H);
+    px("YOU DIED", W/2, H/2 - 100, RED, 26, true);
+    px(`死亡原因: ${lastEnemyAttackName}`, W/2, H/2 - 65, '#ff8888', 11, true);
+    px(`到達階層: FLOOR ${currentFloor} (LOOP ${currentLoop})`, W/2, H/2 - 40, WHITE, 11, true);
+    
+    let totalBaseLv = Object.values(baseBuildings).reduce((a, b) => a + b, 0);
+    px(`--- 基地経営リザルト ---`, W/2, H/2 - 15, "#FFA500", 11, true);
+    px(`総施設レベル: Lv.${totalBaseLv}  /  総獲得マテリアル: ${totalMaterialGained}M`, W/2, H/2 + 5, WHITE, 10, true);
+    px(`カード合成回数: ${totalSynthesisCount}回`, W/2, H/2 + 22, "#FFD700", 10, true);
+    
+    px(`戦闘ターン数: ${totalTurns}  /  総与ダメージ: ${totalDamageDealt}`, W/2, H/2 + 45, WHITE, 10, true);
+    px(`最大コンボ火力: ${maxComboDmg}`, W/2, H/2 + 62, YELLOW, 10, true);
+    px("CLICK TO RESTART", W/2, H/2 + 95, GRAY, 11, true);
   }
 
   if (gameState === "ENDING") {
     cx.fillStyle = 'rgba(5,15,10,0.97)'; cx.fillRect(0, 0, W, H);
-    px("👑 CONGRATULATIONS! 👑", W/2, 45, YELLOW, 20, true);
+    px("👑 CONGRATULATIONS! 👑", W/2, 35, YELLOW, 20, true);
     
     let classMsg = "REALM SAVED.";
-    if (pClass === "WARRIOR") classMsg = "THE MIGHTY WARRIOR SLAIN THE DRAGON!";
-    else if (pClass === "SILENT") classMsg = "THE SILENT VANISHED INTO THE SHADOWS.";
-    else if (pClass === "MAGE") classMsg = "THE WISE MAGE UNLOCKED THE ARCANE SECRETS.";
-    px(classMsg, W/2, 70, WHITE, 11, true);
+    if (pClass === "WARRIOR") classMsg = "WARRIOR: THE REALM IS SAFE BY YOUR SWORD.";
+    else if (pClass === "SILENT") classMsg = "SILENT: THE SHADOWS EMBRACE THE QUIET VICTOR.";
+    else if (pClass === "MAGE") classMsg = "MAGE: ANCIENT SECRETS ARE UNLOCKED IN THE VOID.";
+    else if (pClass === "MERCHANT") classMsg = "MERCHANT: YOUR WEALTH HAS BOUGHT A NEW EMPIRE.";
+    px(classMsg, W/2, 58, WHITE, 9, true);
 
-    // 統計情報の描画
-    px("--- GAME STATS ---", W/2, 105, YELLOW, 11, true);
-    px(`HP: ${pHP}/${pMaxHP}  /  GOLD: ${pGold}G  /  LEVEL: ${pLv}  /  LOOP: ${currentLoop}`, W/2, 125, WHITE, 10, true);
+    px("--- GAME STATS ---", W/2, 82, YELLOW, 11, true);
+    px(`HP: ${pHP}/${pMaxHP}  |  GOLD: ${pGold}G  |  LOOP: ${currentLoop}`, W/2, 98, WHITE, 10, true);
+    
+    let totalBaseLv = Object.values(baseBuildings).reduce((a, b) => a + b, 0);
+    px(`シェルター総施設レベル: Lv.${totalBaseLv}  /  累計資材: ${totalMaterialGained}M`, W/2, Math.round(114), WHITE, 10, true);
+    px(`カード合成回数: ${totalSynthesisCount}回  |  総与ダメ: ${totalDamageDealt}`, W/2, Math.round(130), "#FFD700", 10, true);
 
-    // 所持レリックの表示
     let activeRelicNames = [];
-    Object.keys(pRelics).forEach(k => {
-      if (pRelics[k] && RELIC_MASTER[k]) {
-        activeRelicNames.push(`[${RELIC_MASTER[k].name}]`);
-      }
-    });
-    let relicDisplay = activeRelicNames.join(" ") || "[NONE]";
-    px(`RELICS: ${relicDisplay}`, W/2, 150, CYAN, 9, true);
+    Object.keys(pRelics).forEach(k => { if (pRelics[k] && RELIC_MASTER[k]) activeRelicNames.push(`[${RELIC_MASTER[k].name}]`); });
+    px(`RELICS: ${activeRelicNames.join(" ") || "[NONE]"}`, W/2, Math.round(150), CYAN, 9, true);
 
-    // デッキの要約表示
-    let cardSummary = {};
-    masterDeck.forEach(k => {
-      let name = CARD_MASTER[k].name;
-      cardSummary[name] = (cardSummary[name] || 0) + 1;
-    });
+    let cardSummary = {}; masterDeck.forEach(k => { let name = CARD_MASTER[k].name; cardSummary[name] = (cardSummary[name] || 0) + 1; });
     let deckText = Object.keys(cardSummary).map(name => `${name}x${cardSummary[name]}`).join(", ");
     if (deckText.length > 60) deckText = deckText.substring(0, 57) + "...";
-    px(`DECK (${masterDeck.length} cards):`, W/2, 175, YELLOW, 9, true);
-    px(deckText || "empty", W/2, 192, WHITE, 8, true);
+    px(`DECK (${masterDeck.length} cards):`, W/2, Math.round(172), YELLOW, 9, true);
+    px(deckText || "empty", W/2, Math.round(188), WHITE, 8, true);
 
-    // 選択肢ボタン
     let isHoverDeep = (mx >= 60 && mx <= 230 && my >= 240 && my <= 280);
     let isHoverTitle = (mx >= 282 && mx <= 452 && my >= 240 && my <= 280);
-
     cx.fillStyle = isHoverDeep ? '#1a331a' : '#0d1a0d'; cx.fillRect(60, 240, 170, 40);
     cx.strokeStyle = GREEN; cx.strokeRect(60, 240, 170, 40);
     px("ENTER THE DEEP (LOOP +1)", 145, 264, WHITE, 9, true);
+    px("(※基地施設・マテリアルを引き継ぎます)", 145, 276, '#88cc88', 7, true);
 
     cx.fillStyle = isHoverTitle ? '#331a1a' : '#1a0d0d'; cx.fillRect(282, 240, 170, 40);
     cx.strokeStyle = RED; cx.strokeRect(282, 240, 170, 40);
     px("RETURN TO TITLE", 367, 264, WHITE, 9, true);
   }
 
-  // イベント画面
   if (gameState === "EVENT") {
     cx.fillStyle = 'rgba(15,10,20,0.96)'; cx.fillRect(0, 0, W, H);
-    
     let isH1 = (mx >= 60 && mx <= 452 && my >= 150 && my <= 200);
     let isH2 = (mx >= 60 && mx <= 452 && my >= 220 && my <= 270);
     let isH3 = (mx >= 60 && mx <= 452 && my >= 290 && my <= 340);
@@ -1628,980 +2390,52 @@ function drawUI() {
     if (eventType === "altar") {
       px("REST ALTAR (休息の祭壇)", W/2, 60, YELLOW, 18, true);
       px("静かな祭壇を見つけた。どうする？", W/2, 100, WHITE, 11, true);
-
       cx.fillStyle = isH1 ? '#224' : '#141424'; cx.fillRect(60, 150, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 150, 392, 50);
-      px("1. 休息する (HP +20 回復)", 80, 180, WHITE, 11, false);
-
+      cx.strokeStyle = WHITE; cx.strokeRect(60, 150, 392, 50); px("1. 休息する (HP +20 回復)", 80, 180, WHITE, 11, false);
       cx.fillStyle = isH2 ? '#224' : '#141424'; cx.fillRect(60, 220, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 220, 392, 50);
-      px("2. 鍛冶を行う (ランダムカード1枚強化)", 80, 250, WHITE, 11, false);
-
+      cx.strokeStyle = WHITE; cx.strokeRect(60, 220, 392, 50); px("2. 鍛冶を行う (ランダムカード1枚強化)", 80, 250, WHITE, 11, false);
       cx.fillStyle = isH3 ? '#224' : '#141424'; cx.fillRect(60, 290, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 290, 392, 50);
-      px("3. 祭壇を調べる (レリック獲得 / 呪い「後悔」獲得)", 80, 320, WHITE, 11, false);
+      cx.strokeStyle = WHITE; cx.strokeRect(60, 290, 392, 50); px("3. 祭壇を調べる (レリック獲得 / 呪い「後悔」獲得)", 80, 320, WHITE, 11, false);
     } else if (eventType === "fountain") {
       px("FOUNTAIN OF CHANGE (変化の泉)", W/2, 60, YELLOW, 18, true);
       px("不思議な光を放つ泉がある。どうする？", W/2, 100, WHITE, 11, true);
-
       cx.fillStyle = isH1 ? '#224' : '#141424'; cx.fillRect(60, 150, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 150, 392, 50);
-      px("1. 体を清める (すべてのSTRIKEを＋版にする)", 80, 180, WHITE, 11, false);
-
+      cx.strokeStyle = WHITE; cx.strokeRect(60, 150, 392, 50); px("1. 体を清める (すべてのSTRIKEを＋版にする)", 80, 180, WHITE, 11, false);
       cx.fillStyle = isH2 ? '#224' : '#141424'; cx.fillRect(60, 220, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 220, 392, 50);
-      px("2. 泉に手を入れる (ランダムカード1枚を別カードに変化)", 80, 250, WHITE, 11, false);
-
+      cx.strokeStyle = WHITE; cx.strokeRect(60, 220, 392, 50); px("2. 泉に手を入れる (ランダムカード1枚を別カードに変化)", 80, 250, WHITE, 11, false);
       cx.fillStyle = isH3 ? '#224' : '#141424'; cx.fillRect(60, 290, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 290, 392, 50);
-      px("3. 立ち去る (何も起きない)", 80, 320, WHITE, 11, false);
-    } else if (eventType === "merchant") {
-      px("DARK MERCHANT (闇の商人)", W/2, 60, YELLOW, 18, true);
-      px("怪しい商人が声をかけてきた。どうする？", W/2, 100, WHITE, 11, true);
-
-      cx.fillStyle = isH1 ? '#224' : '#141424'; cx.fillRect(60, 150, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 150, 392, 50);
-      px("1. 魂を売る (ゴールド +80G / 呪い「腐敗」獲得)", 80, 180, WHITE, 11, false);
-
-      cx.fillStyle = isH2 ? '#224' : '#141424'; cx.fillRect(60, 220, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 220, 392, 50);
-      px("2. カードを処分する (ランダムカード1枚削除)", 80, 250, WHITE, 11, false);
-
-      cx.fillStyle = isH3 ? '#224' : '#141424'; cx.fillRect(60, 290, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 290, 392, 50);
-      px("3. 無視して立ち去る (何も起きない)", 80, 320, WHITE, 11, false);
-    } else if (eventType === "mimic") {
-      px("MIMIC CHEST (宝箱の罠)", W/2, 60, YELLOW, 18, true);
-      px("きらびやかな宝箱が置いてある。どうする？", W/2, 100, WHITE, 11, true);
-
-      cx.fillStyle = isH1 ? '#224' : '#141424'; cx.fillRect(60, 150, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 150, 392, 50);
-      px("1. 宝箱を開ける (レリック獲得 / 50%で20HPダメージ)", 80, 180, WHITE, 11, false);
-
-      cx.fillStyle = isH2 ? '#224' : '#141424'; cx.fillRect(60, 220, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 220, 392, 50);
-      px("2. 罠を解除する (25G消費してレリック獲得)", 80, 250, WHITE, 11, false);
-
-      cx.fillStyle = isH3 ? '#224' : '#141424'; cx.fillRect(60, 290, 392, 50);
-      cx.strokeStyle = WHITE; cx.strokeRect(60, 290, 392, 50);
-      px("3. 安全に立ち去る (何も起きない)", 80, 320, WHITE, 11, false);
+      cx.strokeStyle = WHITE; cx.strokeRect(60, 290, 392, 50); px("3. 立ち去る (何も起きない)", 80, 320, WHITE, 11, false);
     }
   }
 
   for(let i=dmgPopups.length-1; i>=0; i--){
-    let p = dmgPopups[i];
-    px(p.text, p.x, p.y, p.col, 12, true);
-    p.y -= 0.6; 
-    p.frames--;
+    let p = dmgPopups[i]; px(p.text, p.x, p.y, p.col, 12, true); p.y -= 0.6; p.frames--;
     if(p.frames <= 0) dmgPopups.splice(i, 1);
   }
 
   if (flashFrame > 0) { cx.fillStyle = `rgba(216,40,0,${flashFrame * 0.08})`; cx.fillRect(0,0,W,H); flashFrame--; }
 
-  // ツールチップ描画
   if (activeTooltip && activeTooltip.name && activeTooltip.desc) {
-    cx.save();
-    let tx = mx + 12;
-    let ty = my + 12;
-    
-    // テキストサイズ計測と枠の寸法算出
-    cx.font = "bold 10px monospace";
-    let titleW = cx.measureText(activeTooltip.name).width;
-    
-    // 長い説明文を折り返す処理 (40文字ごとに分割)
-    let descLines = [];
-    let rawDesc = activeTooltip.desc;
-    for (let j = 0; j < rawDesc.length; j += 32) {
-      descLines.push(rawDesc.substring(j, j + 32));
-    }
-    
-    cx.font = "bold 9px monospace";
-    let maxDescW = 0;
-    descLines.forEach(l => {
-      let lw = cx.measureText(l).width;
-      if (lw > maxDescW) maxDescW = lw;
-    });
-    
-    let tw = Math.max(titleW, maxDescW) + 16;
-    let th = 18 + (descLines.length * 11);
-
-    // 画面外はみ出し防止
-    if (tx + tw > W) tx = mx - tw - 4;
-    if (ty + th > H) ty = my - th - 4;
-
-    cx.fillStyle = "rgba(10, 10, 20, 0.95)";
-    cx.fillRect(tx, ty, tw, th);
-    cx.strokeStyle = WHITE;
-    cx.lineWidth = 1;
-    cx.strokeRect(tx, ty, tw, th);
-
+    cx.save(); let tx = mx + 12; let ty = my + 12;
+    cx.font = "bold 10px monospace"; let titleW = cx.measureText(activeTooltip.name).width;
+    let descLines = []; let rawDesc = activeTooltip.desc;
+    for (let j = 0; j < rawDesc.length; j += 32) descLines.push(rawDesc.substring(j, j + 32));
+    cx.font = "bold 9px monospace"; let maxDescW = 0;
+    descLines.forEach(l => { let lw = cx.measureText(l).width; if (lw > maxDescW) maxDescW = lw; });
+    let tw = Math.max(titleW, maxDescW) + 16; let th = 18 + (descLines.length * 11);
+    if (tx + tw > W) tx = mx - tw - 4; if (ty + th > H) ty = my - th - 4;
+    cx.fillStyle = "rgba(10, 10, 20, 0.95)"; cx.fillRect(tx, ty, tw, th);
+    cx.strokeStyle = WHITE; cx.lineWidth = 1; cx.strokeRect(tx, ty, tw, th);
     px(activeTooltip.name, tx + 8, ty + 14, YELLOW, 10, false);
-    descLines.forEach((l, idx) => {
-      px(l, tx + 8, ty + 25 + (idx * 11), WHITE, 9, false);
-    });
+    descLines.forEach((l, idx) => { px(l, tx + 8, ty + 25 + (idx * 11), WHITE, 9, false); });
     cx.restore();
   }
 }
-
 function drawCRT() {
   cx.save(); cx.globalAlpha = 0.03; cx.fillStyle = '#000';
   for (let y = 0; y < H; y += 2) cx.fillRect(0, y, W, 1); cx.restore();
 }
 
-// ==================== コアカード効果処理ルーチン ====================
-function executeCardEffect(cardKey, simulated) {
-  const cData = CARD_MASTER[cardKey];
-  if (!cData) return;
-  let baseVal = cData.value;
-  
-  if (cData.type === "ATK") baseVal += activeAccuracyBonus;
-  
-  let finalVal = baseVal;
-  let playerFinalPowerBonus = pPower + (pRelics.redGem ? 2 : 0) + (pRelics.loopCrown ? 3 : 0); 
-  if (cData.type === "ATK" && pWeak > 0) finalVal = Math.floor(finalVal * 0.5);
-
-  if (cData.type === "ATK") {
-    if(!simulated) {
-      sfxAttack();
-      enemyShakeFrame = 8;
-      turnAtkCount++;
-      combatAtkCount++;
-      
-      if (activeOrcChallenge && eHP > 0) {
-        eBlock += 4;
-        dmgPopups.push({ text: "CHALLENGE BLOCK +4", x: 380, y: 120, col: CYAN, frames: 30 });
-      }
-      
-      if(activeRupturesCount > 0) {
-        pPower += activeRupturesCount;
-        dmgPopups.push({ text: `RUPTURES +${activeRupturesCount} POW`, x: 100, y: 150, col: PURPLE, frames: 35 });
-      }
-
-      if(pRelics.ninjaScroll && turnAtkCount % 3 === 0) {
-        eHP -= 4;
-        dmgPopups.push({ text: "SCROLL SHURIKEN -4", x: 380, y: 110, col: YELLOW, frames: 35 });
-      }
-    }
-
-    let isCrit = Math.random() < 0.05;
-    let baseDmg = finalVal + playerFinalPowerBonus;
-    
-    if (cData.isShieldBash) {
-      baseDmg = Math.floor(pBlock * (cData.valueFactor || 0.7));
-    } else if (cData.isExecute) {
-      if (eHP <= (eMaxHP / 2)) baseDmg = 20;
-    } else if (cData.isFortress) {
-      baseDmg = finalVal + Math.floor(pBlock * 0.5);
-    } else if (cData.isToxicDmg) {
-      baseDmg = finalVal + (ePoison * 3);
-    } else if (cData.isBarrierBlast) {
-      baseDmg = finalVal + pBlock; 
-    } else if (cData.isBodySlam) {
-      baseDmg = pBlock;
-    } else if (cData.isShieldSlam) {
-      baseDmg = pBlock * (cData.factor || 2);
-      if(!simulated) {
-        pBlock = 0;
-      }
-    } else if (cData.isPoisonBurst) {
-      baseDmg = 0;
-      if(!simulated) {
-        ePoison *= (cData.factor || 2);
-        dmgPopups.push({ text: `💥BURST POIS x${cData.factor || 2} (${ePoison})`, x: 380, y: 130, col: GREEN, frames: 45 });
-      }
-    } else if (cData.strengthSynergy) {
-      baseDmg = finalVal + playerFinalPowerBonus;
-      if(playerFinalPowerBonus > 0 && !simulated) {
-        pPower += 1;
-        dmgPopups.push({ text: "HEAVY STRGT +1 POW", x: 100, y: 130, col: PURPLE, frames: 35 });
-      }
-    } else if (cData.isCatalyst) {
-      baseDmg = 0;
-      if(!simulated) {
-        ePoison *= 2;
-        dmgPopups.push({ text: `💥CATALYST POIS x2 (${ePoison})`, x: 380, y: 130, col: GREEN, frames: 45 });
-      }
-    } else if (cData.risky) {
-      baseDmg = cData.value;
-      if(!simulated && Math.random() < (cData.riskyProb || 0.3)) {
-        pHP = Math.max(1, pHP - (cData.riskyDmg || 4));
-        dmgPopups.push({ text: `WILD RECOIL -${cData.riskyDmg || 4} HP`, x: 100, y: 160, col: RED, frames: 35 });
-      }
-    } else if (cData.isOffering) {
-      baseDmg = 12 + activeAccuracyBonus;
-      if(!simulated) {
-        pHP = Math.max(1, pHP - 3);
-        dmgPopups.push({ text: "OFFERING SACRIFICE -3 HP", x: 100, y: 160, col: RED, frames: 35 });
-      }
-    } else if (cData.isFlask) {
-      baseDmg = 0;
-      if (!simulated) {
-        let times = cData.poisonTimes || 3;
-        let pVal = cData.poisonVal || 3;
-        let totalAdded = 0;
-        for (let t = 0; t < times; t++) {
-          let pGain = pVal + (pRelics.sneckoSkull ? 1 : 0);
-          ePoison += pGain;
-          totalAdded += pGain;
-        }
-        dmgPopups.push({ text: `FLASK POISON +${totalAdded}`, x: 380, y: 140, col: GREEN, frames: 45 });
-      }
-    } else if (cData.isThunderStrike) {
-      baseDmg = combatAtkCount * (cData.factor || 5);
-    } else if (cData.goldSlam) {
-      baseDmg = Math.floor(pGold * 0.2);
-    } else if (cData.leftBlast) {
-      baseDmg = (playedCardIdx === 0) ? 16 : 6;
-    }
-
-    if (cData.payday && !simulated) {
-      pGold += 5;
-      dmgPopups.push({ text: "PAYDAY +5G", x: 100, y: 150, col: YELLOW, frames: 35 });
-    }
-
-    let dmg = isCrit ? baseDmg * 2 : baseDmg;
-    if (eType && eVuln > 0) dmg = Math.floor(dmg * 1.5);
-
-    if (dmg > 0) {
-      if (eType === "slime" && (slimeChildHP1 > 0 || slimeChildHP2 > 0)) {
-        if (slimeChildHP1 > 0) {
-          let actualDmg = Math.min(slimeChildHP1, dmg);
-          slimeChildHP1 -= actualDmg;
-          dmgPopups.push({ text: `MINI-SLIME 1: -${actualDmg}`, x: 340, y: 200, col: CYAN, frames: 35 });
-        } else if (slimeChildHP2 > 0) {
-          let actualDmg = Math.min(slimeChildHP2, dmg);
-          slimeChildHP2 -= actualDmg;
-          dmgPopups.push({ text: `MINI-SLIME 2: -${actualDmg}`, x: 420, y: 200, col: CYAN, frames: 35 });
-        }
-      } else {
-        if (eBlock >= dmg) {
-          eBlock -= dmg;
-          if(!simulated) dmgPopups.push({ text: "ENEMY BLOCKED", x: 380, y: 160, col: "#00c8d0", frames: 40 });
-        } else {
-          dmg -= eBlock; eBlock = 0; eHP -= dmg;
-          if(!simulated) {
-            let popText = isCrit ? `💥CRITICAL! -${dmg}` : `-${dmg}`;
-            dmgPopups.push({ text: popText, x: 380, y: 150, col: isCrit ? YELLOW : RED, frames: 45 });
-          }
-        }
-      }
-    }
-
-    if (!simulated) {
-      if (eThorns > 0) {
-        pHP -= eThorns;
-        dmgPopups.push({ text: `THORNS -${eThorns}`, x: 100, y: 175, col: RED, frames: 35 });
-        flashFrame = 6;
-        if (pHP <= 0) { pHP = 0; gameState = "GAMEOVER"; }
-      }
-
-      if (cData.vamp) {
-        const healAmount = Math.floor(dmg * cData.vamp);
-        pHP = Math.min(pMaxHP, pHP + healAmount);
-        dmgPopups.push({ text: `+${healAmount} VAMP`, x: 100, y: 145, col: GREEN, frames: 40 });
-      }
-      if (cData.poison) {
-        let pGain = cData.poison + (pRelics.sneckoSkull ? 1 : 0);
-        ePoison += pGain;
-        dmgPopups.push({ text: `POISON +${pGain}`, x: 380, y: 140, col: GREEN, frames: 35 });
-      }
-      if (cData.addBlock) pBlock += cData.addBlock;
-      if (cData.applyWeak) {
-        eWeak += cData.applyWeak;
-        dmgPopups.push({ text: `WEAKENED +${cData.applyWeak}`, x: 380, y: 120, col: GREEN, frames: 35 });
-      }
-      if (cData.vuln) {
-        eVuln += cData.vuln;
-        dmgPopups.push({ text: `VULNERABLE +${cData.vuln}`, x: 380, y: 130, col: YELLOW, frames: 35 });
-      } 
-    }
-
-  } else if (cData.type === "DEF") {
-    if(!simulated) {
-      sfxDefend();
-      turnDefCount++;
-      
-      if(pRelics.letterOpener && turnDefCount % 3 === 0) {
-        eHP -= 6;
-        dmgPopups.push({ text: "OPENER SLASH -6", x: 380, y: 110, col: CYAN, frames: 35 });
-      }
-    }
-
-    let blockGain = finalVal;
-    if (cData.rightShield) {
-      blockGain = (playedCardIdx === playedHandLength - 1) ? 12 : 5;
-    }
-    if (cData.bribery && !simulated) {
-      eWeak += 1;
-      dmgPopups.push({ text: "BRIBERY: WEAK 1", x: 380, y: 120, col: GREEN, frames: 35 });
-      if (pGold >= 15) {
-        pGold -= 15;
-        eIntent.value = Math.max(0, eIntent.value - 5);
-        dmgPopups.push({ text: "PAY 15G: ENEMY ATK -5", x: 380, y: 140, col: RED, frames: 35 });
-      }
-    }
-    if (cData.exhaustSynergy) {
-      if(!simulated) {
-        let count = hand.length;
-        triggerDiscardBlockLogic(count); 
-        discard.push(...hand); hand = [];
-        blockGain += (count * 4);
-        dmgPopups.push({ text: `EXHAUST WIND +${count * 4}`, x: 100, y: 130, col: CYAN, frames: 40 });
-        
-        for(let ex=0; ex<count; ex++) triggerExhaustLogic(); 
-      }
-    }
-    if (cData.isTrueGrit && !simulated) {
-      if (hand.length > 0) {
-        let rIdx = Math.floor(Math.random() * hand.length);
-        hand.splice(rIdx, 1);
-        dmgPopups.push({ text: "🔥EXHAUSTED", x: 256, y: 260, col: GRAY, frames: 35 });
-        triggerExhaustLogic();
-      }
-    }
-
-    if (cData.isArmaments && !simulated) {
-      let upgradeables = [];
-      for (let i = 0; i < hand.length; i++) {
-        let card = hand[i];
-        if (CARD_MASTER[card + "+"]) {
-          upgradeables.push(i);
-        }
-      }
-      if (upgradeables.length > 0) {
-        let target = upgradeables[Math.floor(Math.random() * upgradeables.length)];
-        hand[target] = hand[target] + "+";
-        dmgPopups.push({ text: `UPGRADED: ${CARD_MASTER[hand[target]].name}`, x: 256, y: 240, col: YELLOW, frames: 45 });
-      }
-    }
-
-    if (cData.isDodge && !simulated) {
-      nextTurnBlock += cData.nextBlock || 4;
-      dmgPopups.push({ text: `NEXT BLOCK +${cData.nextBlock || 4}`, x: 100, y: 135, col: CYAN, frames: 35 });
-    }
-
-    if (pFrail > 0) {
-      blockGain = Math.floor(blockGain * 0.5);
-    }
-
-    if(cData.reflectPower && !simulated) {
-      pReflect += cData.reflectPower;
-      dmgPopups.push({ text: `REFLECT SHIELD +${cData.reflectPower}`, x: 100, y: 130, col: RED, frames: 35 });
-    }
-
-    pBlock += blockGain;
-    if(!simulated) dmgPopups.push({ text: `+${blockGain}`, x: 100, y: 160, col: CYAN, frames: 40 });
-
-  } else if (cData.type === "POW") {
-    if(!simulated) {
-      sfxRarePower();
-      if(cData.ruptures) activeRupturesCount++;
-      if(cData.ironSkin) activeIronSkinCount++;
-      if(cData.accuracyBuff) activeAccuracyBonus += cData.accuracyBuff;
-      if(cData.shivGen) activeInfiniteBladesCount++;
-      if(cData.darkEmbrace) activeDarkEmbraceCount++;
-      if(cData.feelNoPain) activeFeelNoPainCount += cData.value;
-      
-      if(cData.adrenaline) {
-        pEnergy += cData.adrenalineVal || 2;
-        nextTurnEnergyMod = -1; 
-        dmgPopups.push({ text: `ADRENALINE NRG +${cData.adrenalineVal || 2}`, x: 100, y: 130, col: BLUE, frames: 40 });
-      }
-      
-      pPower += finalVal; 
-      if(cardKey === "rage") pBlock = 0; 
-      if(cData.chargeBlock) {
-        pBlock += cData.chargeBlock;
-        dmgPopups.push({ text: `CHARGE BLK +${cData.chargeBlock}`, x: 100, y: 130, col: CYAN, frames: 35 });
-      }
-      
-      if(cData.dualWield) {
-        let attackKeys = Object.keys(CARD_MASTER).filter(k => CARD_MASTER[k].type === "ATK");
-        let spawned = attackKeys[Math.floor(Math.random() * attackKeys.length)];
-        if(hand.length < 10) {
-          hand.push(spawned);
-          handCostMods.push(0);
-        }
-      }
-      
-      if(cData.combust) {
-        activeCombustCount += cData.combust;
-        dmgPopups.push({ text: `COMBUST ACTIVE`, x: 100, y: 130, col: RED, frames: 40 });
-      }
-      if(cData.setup) {
-        nextCardCostMod = 1;
-        dmgPopups.push({ text: `SETUP COST -1`, x: 100, y: 130, col: CYAN, frames: 40 });
-      }
-      if (cData.isDoubleEnergy && !simulated) {
-        pEnergy = pEnergy * 2;
-        dmgPopups.push({ text: `ENERGY DOUBLED: ${pEnergy}`, x: 100, y: 130, col: BLUE, frames: 40 });
-      }
-
-      if (pRelics.mummifiedHand && hand.length > 0) {
-        let targets = [];
-        for (let i = 0; i < hand.length; i++) {
-          let baseCost = CARD_MASTER[hand[i]].cost;
-          let actualCost = Math.max(0, baseCost - (handCostMods[i] || 0));
-          if (actualCost > 0) targets.push(i);
-        }
-        if (targets.length > 0) {
-          let target = targets[Math.floor(Math.random() * targets.length)];
-          handCostMods[target] = CARD_MASTER[hand[target]].cost;
-          dmgPopups.push({ text: `MUMMY HAND: ${CARD_MASTER[hand[target]].name} COST 0`, x: 256, y: 220, col: YELLOW, frames: 45 });
-        }
-      }
-
-      dmgPopups.push({ text: `POWER ACTIVE!`, x: 100, y: 150, col: PURPLE, frames: 45 });
-    }
-  } else if (cData.type === "HEAL") {
-    if(!simulated) {
-      sfxRare();
-      pHP = Math.min(pMaxHP, pHP + finalVal);
-      dmgPopups.push({ text: `+${finalVal} HEAL`, x: 100, y: 160, col: GREEN, frames: 40 });
-    }
-  }
-
-  if (!simulated && cData.draw) {
-    if (cData.centerOnly) {
-      if (playedCardIdx === Math.floor(playedHandLength / 2)) {
-        drawCards(cData.draw);
-        dmgPopups.push({ text: "CENTER CHARGE DRAW!", x: 256, y: 240, col: YELLOW, frames: 35 });
-      }
-    } else {
-      drawCards(cData.draw);
-    }
-  }
-}
-
-// ==================== クリック・ロジック ====================
-cv.addEventListener('mousemove', e => {
-  const rect = cv.getBoundingClientRect();
-  mx = (e.clientX - rect.left) * (512 / rect.width);
-  my = (e.clientY - rect.top) * (460 / rect.height);
-});
-
-cv.addEventListener('click', e => {
-  const rect = cv.getBoundingClientRect();
-  mx = (e.clientX - rect.left) * (512 / rect.width);
-  my = (e.clientY - rect.top) * (460 / rect.height);
-
-  if (gameState === "GAMEOVER") { initGame(); return; }
-  if (gameState === "ENDING") {
-    let isClickDeep = (mx >= 60 && mx <= 230 && my >= 240 && my <= 280);
-    let isClickTitle = (mx >= 282 && mx <= 452 && my >= 240 && my <= 280);
-    if (isClickDeep) {
-      currentLoop++;
-      maxLoopReached = Math.max(maxLoopReached, currentLoop);
-      
-      let unowned = [];
-      if (!pRelics.loopCrown) unowned.push("loopCrown");
-      if (!pRelics.voidStone) unowned.push("voidStone");
-      
-      if (unowned.length > 0) {
-        let rRelic = unowned[Math.floor(Math.random() * unowned.length)];
-        pRelics[rRelic] = true;
-        dmgPopups.push({ text: `LOOP REWARD: ${RELIC_MASTER[rRelic].name}`, x: 256, y: 150, col: YELLOW, frames: 55 });
-        if (rRelic === "voidStone") {
-          pMaxHP = Math.max(10, pMaxHP - 5);
-          pHP = Math.min(pHP, pMaxHP);
-        }
-      } else {
-        pGold += 50;
-        dmgPopups.push({ text: "LOOP BONUS +50G", x: 256, y: 150, col: YELLOW, frames: 55 });
-      }
-
-      masterDeck.push("heavyStrain");
-      currentFloor = 1;
-      initFloor();
-    } else if (isClickTitle) {
-      initGame();
-    }
-    return;
-  }
-
-  if (gameState === "CLASS_SELECT") {
-    const boxW = 112, boxH = 210;
-    
-    // Warrior
-    let wX = 12, wY = 130;
-    if (mx >= wX && mx <= wX + boxW && my >= wY && my <= wY + boxH) {
-      pClass = "WARRIOR";
-      pMaxHP = 50; pHP = 50;
-      masterDeck = ["strike", "strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "bash", "quick"];
-      sfxLvUp();
-      initFloor();
-      return;
-    }
-    
-    // Silent
-    let sX = 134, sY = 130;
-    if (mx >= sX && mx <= sX + boxW && my >= sY && my <= sY + boxH) {
-      pClass = "SILENT";
-      pMaxHP = 40; pHP = 40;
-      masterDeck = ["strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "defend", "quick", "quick", "poisonD"];
-      sfxLvUp();
-      initFloor();
-      return;
-    }
-    
-    // Mage
-    let mX = 256, mY = 130;
-    if (mx >= mX && mx <= mX + boxW && my >= mY && my <= mY + boxH) {
-      pClass = "MAGE";
-      pMaxHP = 35; pHP = 35;
-      masterDeck = ["strike", "strike", "strike", "strike", "defend", "defend", "defend", "defend", "zap", "zap", "charge"];
-      sfxLvUp();
-      initFloor();
-      return;
-    }
-
-    // Merchant
-    let mrX = 378, mrY = 130;
-    if (mx >= mrX && mx <= mrX + boxW && my >= mrY && my <= mrY + boxH) {
-      pClass = "MERCHANT";
-      pMaxHP = 45; pHP = 45;
-      masterDeck = ["strike", "strike", "defend", "defend", "payday", "payday", "bribery", "goldSlam"];
-      pRelics.goldBag = true;
-      sfxLvUp();
-      initFloor();
-      return;
-    }
-    return;
-  }
-
-  if (gameState === "MAP_SELECT") {
-    const boxW = 160, boxH = 100, bY = 160;
-    for (let i = 0; i < mapOptions.length; i++) {
-      let bX = 66 + i * 220;
-      if (mx >= bX && mx <= bX + boxW && my >= bY && my <= bY + boxH) {
-        let selectedOpt = mapOptions[i];
-        currentFloor++;
-        sfxRare();
-        if (selectedOpt.type === "BATTLE") {
-          initFloor();
-        } else if (selectedOpt.type === "EVENT") {
-          gameState = "EVENT";
-          eventType = Math.random() < 0.5 ? "altar" : "fountain";
-          if (currentFloor >= 3) {
-            eventType = Math.random() < 0.5 ? "merchant" : "mimic";
-          }
-        } else if (selectedOpt.type === "SHOP") {
-          generateShopInventory();
-        } else if (selectedOpt.type === "CAMPFIRE") {
-          gameState = "CAMPFIRE";
-        }
-        return;
-      }
-    }
-    return;
-  }
-
-  if (gameState === "CAMPFIRE") {
-    const boxW = 160, boxH = 100, bY = 160;
-    // REST
-    if (mx >= 66 && mx <= 66 + boxW && my >= bY && my <= bY + boxH) {
-      pHP = pMaxHP;
-      sfxRare();
-      dmgPopups.push({ text: "REST: HP FULLY HEALED", x: 256, y: 200, col: GREEN, frames: 40 });
-      setTimeout(() => { proceedToNextFloor(); }, 800);
-    }
-    // SMITH
-    else if (mx >= 286 && mx <= 286 + boxW && my >= bY && my <= bY + boxH) {
-      let upgradeables = [];
-      for (let i = 0; i < masterDeck.length; i++) {
-        let k = masterDeck[i];
-        if (CARD_MASTER[k + "+"] !== undefined || CARD_MASTER[k + "-"] !== undefined) {
-          upgradeables.push(i);
-        }
-      }
-      if (upgradeables.length > 0) {
-        let target = upgradeables[Math.floor(Math.random() * upgradeables.length)];
-        upgradeTargetIdx = target;
-        upgradeSource = "CAMPFIRE";
-        gameState = "SMITH_BRANCH";
-        sfxRare();
-      } else {
-        dmgPopups.push({ text: "NO UPGRADEABLE CARDS", x: 256, y: 200, col: GRAY, frames: 35 });
-        setTimeout(() => { proceedToNextFloor(); }, 800);
-      }
-    }
-    return;
-  }
-
-  if (gameState === "EVENT") {
-    if (eventType === "altar") {
-      if (mx >= 60 && mx <= 452 && my >= 150 && my <= 200) {
-        pHP = Math.min(pMaxHP, pHP + 20);
-        sfxRare();
-        initFloor();
-      } else if (mx >= 60 && mx <= 452 && my >= 220 && my <= 270) {
-        let upgradeables = masterDeck.filter(k => CARD_MASTER[k + "+"]);
-        if (upgradeables.length > 0) {
-          let rK = upgradeables[Math.floor(Math.random() * upgradeables.length)];
-          let idx = masterDeck.indexOf(rK);
-          masterDeck[idx] = rK + "+";
-          sfxRare();
-        }
-        initFloor();
-      } else if (mx >= 60 && mx <= 452 && my >= 290 && my <= 340) {
-        let unownedRelics = Object.keys(RELIC_MASTER).filter(k => !pRelics[k]);
-        if (unownedRelics.length > 0) {
-          let rR = unownedRelics[Math.floor(Math.random() * unownedRelics.length)];
-          pRelics[rR] = true;
-        }
-        masterDeck.push("regret");
-        sfxRare();
-        initFloor();
-      }
-    } else if (eventType === "fountain") {
-      if (mx >= 60 && mx <= 452 && my >= 150 && my <= 200) {
-        masterDeck = masterDeck.map(k => k === "strike" ? "strike+" : k);
-        sfxLvUp();
-        initFloor();
-      } else if (mx >= 60 && mx <= 452 && my >= 220 && my <= 270) {
-        if (masterDeck.length > 0) {
-          let rIdx = Math.floor(Math.random() * masterDeck.length);
-          masterDeck.splice(rIdx, 1);
-          let rareKeys = Object.keys(CARD_MASTER).filter(k => CARD_MASTER[k].rare === "RARE" && k !== "regret" && k !== "decay");
-          let spawned = rareKeys[Math.floor(Math.random() * rareKeys.length)];
-          masterDeck.push(spawned);
-          sfxRare();
-        }
-        initFloor();
-      } else if (mx >= 60 && mx <= 452 && my >= 290 && my <= 340) {
-        initFloor();
-      }
-    } else if (eventType === "merchant") {
-      if (mx >= 60 && mx <= 452 && my >= 150 && my <= 200) {
-        pGold += 80;
-        masterDeck.push("decay");
-        sfxRare();
-        initFloor();
-      } else if (mx >= 60 && mx <= 452 && my >= 220 && my <= 270) {
-        if (masterDeck.length > 3) {
-          let rIdx = Math.floor(Math.random() * masterDeck.length);
-          masterDeck.splice(rIdx, 1);
-          sfxAttack();
-        }
-        initFloor();
-      } else if (mx >= 60 && mx <= 452 && my >= 290 && my <= 340) {
-        initFloor();
-      }
-    } else if (eventType === "mimic") {
-      if (mx >= 60 && mx <= 452 && my >= 150 && my <= 200) {
-        let unowned = Object.keys(RELIC_MASTER).filter(k => !pRelics[k]);
-        if (unowned.length > 0) {
-          let rR = unowned[Math.floor(Math.random() * unowned.length)];
-          pRelics[rR] = true;
-        }
-        if (Math.random() < 0.5) {
-          pHP = Math.max(1, pHP - 20);
-          dmgPopups.push({ text: "TRAP! -20 HP", x: 256, y: 200, col: RED, frames: 40 });
-          sfxDeath();
-        } else {
-          dmgPopups.push({ text: "SAFE!", x: 256, y: 200, col: GREEN, frames: 40 });
-          sfxRare();
-        }
-        initFloor();
-      } else if (mx >= 60 && mx <= 452 && my >= 220 && my <= 270) {
-        if (pGold >= 25) {
-          pGold -= 25;
-          let unowned = Object.keys(RELIC_MASTER).filter(k => !pRelics[k]);
-          if (unowned.length > 0) {
-            let rR = unowned[Math.floor(Math.random() * unowned.length)];
-            pRelics[rR] = true;
-          }
-          sfxRare();
-          initFloor();
-        } else {
-          beep(140, 0.08, 'square', 0.1); 
-        }
-      } else if (mx >= 60 && mx <= 452 && my >= 290 && my <= 340) {
-        initFloor();
-      }
-    }
-    return;
-  }
-
-  if (gameState === "LEVELUP") {
-    if (mx >= 50 && mx <= 170 && my >= 200 && my <= 260) {
-      pMaxHP += 5; pHP += 5; generateRewardOptions();
-    } else if (mx >= 196 && mx <= 316 && my >= 200 && my <= 260) {
-      pMaxEnergy += 1; generateRewardOptions();
-    } else if (mx >= 342 && mx <= 462 && my >= 200 && my <= 260) {
-      let upgradeables = masterDeck.filter(k => CARD_MASTER[k + "+"]);
-      if (upgradeables.length > 0) {
-        upgradeSource = "LEVELUP";
-        gameState = "UPGRADE_SCREEN";
-      } else {
-        generateRewardOptions();
-      }
-    }
-    return;
-  }
-
-  if (gameState === "UPGRADE_SCREEN") {
-    let startX = 46, startY = 90;
-    for(let i=0; i<masterDeck.length; i++) {
-      let cardKey = masterDeck[i];
-      let isUpgradeable = (CARD_MASTER[cardKey + "+"] !== undefined || CARD_MASTER[cardKey + "-"] !== undefined);
-      if (!isUpgradeable) continue;
-      
-      let rX = startX + (i % 5) * 84;
-      let rY = startY + Math.floor(i / 5) * 50;
-      if (mx >= rX && mx <= rX + 76 && my >= rY && my <= rY + 40) {
-        upgradeTargetIdx = i;
-        upgradeSource = "LEVELUP";
-        gameState = "SMITH_BRANCH"; 
-        sfxRare();
-        return;
-      }
-    }
-    return;
-  }
-
-  if (gameState === "SMITH_BRANCH") {
-    const boxW = 160, boxH = 100, bY = 160;
-    let cardKey = masterDeck[upgradeTargetIdx];
-    let selectedUp = "";
-    
-    // POWER (+)
-    if (mx >= 66 && mx <= 66 + boxW && my >= bY && my <= bY + boxH) {
-      let plusKey = cardKey + "+";
-      if (CARD_MASTER[plusKey] !== undefined) {
-        selectedUp = plusKey;
-      }
-    }
-    // LIGHTWEIGHT (-)
-    else if (mx >= 286 && mx <= 286 + boxW && my >= bY && my <= bY + boxH) {
-      let minusKey = cardKey + "-";
-      if (CARD_MASTER[minusKey] !== undefined) {
-        selectedUp = minusKey;
-      }
-    }
-
-    if (selectedUp !== "") {
-      masterDeck[upgradeTargetIdx] = selectedUp;
-      sfxRare();
-      dmgPopups.push({ text: `UPGRADED: ${CARD_MASTER[selectedUp].name}`, x: 256, y: 200, col: YELLOW, frames: 40 });
-      
-      setTimeout(() => {
-        if (upgradeSource === "CAMPFIRE") {
-          proceedToNextFloor();
-        } else {
-          generateRewardOptions();
-        }
-      }, 800);
-    }
-    return;
-  }
-
-  if (gameState === "REWARD") {
-    if (mx >= 196 && mx <= 316 && my >= 315 && my <= 345) {
-      pHP = Math.min(pMaxHP, pHP + 15);
-      proceedToNextFloor(); return;
-    }
-    const rwW = 100, rwH = 150, rY = 135;
-    for(let i=0; i<3; i++) {
-      let rx = 76 + i * 130;
-      if (mx >= rx && mx <= rx + rwW && my >= rY && my <= rY + rwH) {
-        masterDeck.push(rewardOptions[i]); 
-        proceedToNextFloor(); return;
-      }
-    }
-    return;
-  }
-
-  if (gameState === "SHOP") {
-    const sW = 86, sH = 150, sY = 125, gap = 10;
-    for(let i=0; i<shopInventory.length; i++) {
-      let item = shopInventory[i];
-      let sX = 18 + i * (sW + gap);
-      if (mx >= sX && mx <= sX + sW && my >= sY && my <= sY + sH && !item.bought) {
-        if (pGold >= item.cost) {
-          pGold -= item.cost;
-          sfxRare();
-          
-          if (item.type === "REMOVE") {
-            activeShopItemIdx = i; 
-            gameState = "SHOP_REMOVE"; 
-          } else if (item.type === "POTION") {
-            if (pPotions.length < 2) {
-              item.bought = true;
-              let types = ["healP", "poisP", "shieldP"];
-              let rType = types[Math.floor(Math.random() * types.length)];
-              pPotions.push(rType);
-              dmgPopups.push({ text: `BOUGHT: ${POTION_MASTER[rType].name}`, x: 256, y: 200, col: GREEN, frames: 35 });
-            } else {
-              pGold += item.cost; 
-              beep(140, 0.08, 'square', 0.1);
-              dmgPopups.push({ text: "SLOTS FULL", x: 256, y: 200, col: RED, frames: 30 });
-            }
-          } else if (item.type === "RELIC") {
-            item.bought = true;
-            pRelics[item.relicKey] = true; 
-            dmgPopups.push({ text: "RELIC ACTIVE!", x: 256, y: 200, col: YELLOW, frames: 40 });
-          } else if (item.type === "CARD") {
-            item.bought = true;
-            masterDeck.push(item.cardKey); 
-          }
-        }
-        return;
-      }
-    }
-    if (mx >= 206 && mx <= 306 && my >= 330 && my <= 360) {
-      proceedToNextFloor();
-    }
-    return;
-  }
-
-  if (gameState === "SHOP_REMOVE") {
-    let startX = 46, startY = 90;
-    for(let i=0; i<masterDeck.length; i++) {
-      let rX = startX + (i % 5) * 84;
-      let rY = startY + Math.floor(i / 5) * 50;
-      if (mx >= rX && mx <= rX + 76 && my >= rY && my <= rY + 40) {
-        masterDeck.splice(i, 1); 
-        sfxAttack();
-        if(activeShopItemIdx !== -1) {
-          shopInventory[activeShopItemIdx].bought = true; 
-        }
-        gameState = "SHOP"; 
-        return;
-      }
-    }
-    return;
-  }
-
-  if (gameState === "BATTLE") {
-    let potY = 52;
-    for (let i = 0; i < pPotions.length; i++) {
-      let potX = 20 + i * 28;
-      if (mx >= potX && mx <= potX + 22 && my >= potY && my <= potY + 22) {
-        let pot = pPotions[i];
-        if (pot === "healP") {
-          pHP = Math.min(pMaxHP, pHP + 15);
-          dmgPopups.push({ text: "+15 HP HEALED", x: 100, y: 160, col: GREEN, frames: 35 });
-        } else if (pot === "poisP") {
-          let pGain = 5 + (pRelics.sneckoSkull ? 1 : 0);
-          ePoison += pGain;
-          dmgPopups.push({ text: `POISON +${pGain}`, x: 380, y: 140, col: GREEN, frames: 35 });
-        } else if (pot === "shieldP") {
-          pBlock += 8;
-          dmgPopups.push({ text: "+8 BLOCK", x: 100, y: 160, col: CYAN, frames: 35 });
-        }
-        sfxDefend();
-        pPotions.splice(i, 1);
-        selectedIdx = -1; 
-        return;
-      }
-    }
-  }
-
-  if (gameState !== "BATTLE") return;
-
-  // ターン終了ボタン判定
-  if (mx >= 415 && mx <= 495 && my >= 298 && my <= 328) {
-    runEnemyTurn(); return;
-  }
-
-  // 【クリック解決処理の完全修正】
-  // selectedIdx は毎フレーム描画ループ内で正確にマウス座標から再取得されているため、ここでの再走査は不要です。
-  if (selectedIdx !== -1 && selectedIdx < hand.length) {
-    const targetIdx = selectedIdx; 
-    const cardKey = hand[targetIdx];
-    const cData = CARD_MASTER[cardKey];
-
-    if (cData.centerOnly && targetIdx !== Math.floor(hand.length / 2)) {
-      beep(140, 0.08, 'square', 0.1);
-      dmgPopups.push({ text: "CENTER ONLY", x: 256, y: 300, col: RED, frames: 30 });
-      return;
-    }
-
-    let currentCost = Math.max(0, cData.cost - nextCardCostMod - (handCostMods[targetIdx] || 0));
-    if (pEnergy >= currentCost) {
-      pEnergy -= currentCost;
-      if (nextCardCostMod > 0) nextCardCostMod = 0; 
-      
-      playedCardIdx = targetIdx;
-      playedHandLength = hand.length;
-
-      hand.splice(targetIdx, 1);
-      handCostMods.splice(targetIdx, 1);
-      
-      let isExhausted = cData.exhaust;
-      if (!isExhausted) {
-        discard.push(cardKey);
-      } else {
-        dmgPopups.push({ text: "🔥EXHAUSTED", x: 256, y: 260, col: GRAY, frames: 35 });
-        triggerExhaustLogic();
-      }
-
-      let triggerEcho = (pRelics.echoRing && cData.type === "ATK" && isFirstAtkInTurn);
-      if(cData.type === "ATK" && isFirstAtkInTurn) isFirstAtkInTurn = false;
-
-      executeCardEffect(cardKey, false);
-
-      if (triggerEcho && eHP > 0) {
-        setTimeout(() => {
-          if (eHP > 0) {
-            dmgPopups.push({ text: "✨ECHO RING!", x: 256, y: 180, col: PURPLE, frames: 35 });
-            executeCardEffect(cardKey, false);
-          }
-        }, 250);
-      }
-
-      // 処理が全て終わった直後にインデックスをクリーンアップ
-      selectedIdx = -1;
-
-      if (eHP <= 0) {
-        eHP = 0;
-        hand = []; discard = []; 
-        triggerEnemyDeathAnim(); 
-      }
-    } else {
-      beep(140, 0.08, 'square', 0.1); 
-    }
-  }
-});
-
-// キーボードイベント側も完全に同期化
-window.addEventListener('keydown', e => {
-  if (gameState !== "BATTLE") return;
-  if (e.code === "Space") {
-    runEnemyTurn();
-  }
-  if (e.key >= '1' && e.key <= '9') {
-    let idx = parseInt(e.key) - 1;
-    if (idx < hand.length) {
-      selectedIdx = idx; // 選択インデックスを強制上書きしてクリックイベントを発火
-      cv.dispatchEvent(new Event('click'));
-    }
-  }
-});
-
-function loop() {
-  fc++; 
-  if (enemyShakeFrame > 0) enemyShakeFrame--;
-  
-  if (gameState === "DEATH_ANIM") {
-    enemyDeathFrame--;
-    if (enemyDeathFrame <= 0) {
-      handleEnemyDeathFinal(); 
-    }
-  }
-
-  cx.save();
-  cx.scale(1.5, 1.5);
-  drawUI();
-  drawCRT();
-  cx.restore();
-
-  requestAnimationFrame(loop);
-}
-
-initGame();
-loop();
 </script>
 </body>
 </html>
